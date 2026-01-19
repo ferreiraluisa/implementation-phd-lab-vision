@@ -10,8 +10,8 @@
 module load Python
 
 # Activate conda environment if needed
-# source ~/miniconda3/etc/profile.d/conda.sh
-# conda activate myenv
+conda init
+conda activate h36m
 
 python /home/s26ldeso/Human3.6M/src/datasets/h36/read_human36m.py \
     --source_dir /home/s26ldeso/Human3.6 \
