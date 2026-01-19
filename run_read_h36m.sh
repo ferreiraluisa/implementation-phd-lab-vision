@@ -8,12 +8,12 @@
 #SBATCH --output=run_read_h36m_%j.out
 #SBATCH --error=run_read_h36m_%j.err
 
-# Load Python module
-module load Python
 
-# Activate conda environment if needed
 source ~/.bashrc
 conda activate h36m
+
+which python
+python -V
 
 python /home/s26ldeso/implementation-phd-lab-vision/datasets/read_human_36m.py \
     --source_dir /home/s26ldeso/Human3.6 \
