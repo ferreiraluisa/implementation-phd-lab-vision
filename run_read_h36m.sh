@@ -12,7 +12,7 @@
 module load Python
 
 # Activate conda environment if needed
-conda init
+source ~/.bashrc
 conda activate h36m
 
 python /home/s26ldeso/implementation-phd-lab-vision/datasets/read_human_36m.py \
