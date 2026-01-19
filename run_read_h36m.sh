@@ -15,7 +15,7 @@ module load Python
 conda init
 conda activate h36m
 
-python /home/s26ldeso/Human3.6M/src/datasets/h36/read_human36m.py \
+python /home/s26ldeso/implementation-phd-lab-vision/datasets/read_human_36m.py \
     --source_dir /home/s26ldeso/Human3.6 \
     --out_dir /home/s26ldeso/Human3.6M_preprocessed \
     --frame_skip 2
