@@ -5,6 +5,8 @@
 #SBATCH --ntasks=1               # number of CPU tasks
 #SBATCH --cpus-per-task=4        # number of CPU cores per task (optional)
 #SBATCH --mem=16G                # RAM (optional)
+#SBATCH --output=run_read_h36m.out
+#SBATCH --error=run_read_h36m.err
 
 # Load Python module
 module load Python
