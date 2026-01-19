@@ -117,5 +117,6 @@ def main(raw_data_root, output_root, frame_skip, num_workers):
         print(r)
 
 if __name__ == '__main__':
+    print("Starting Human3.6M preprocessing with multiprocessing...")
     FLAGS(sys.argv)
     main(FLAGS.source_dir, FLAGS.out_dir, FLAGS.frame_skip, FLAGS.num_workers)
