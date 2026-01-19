@@ -19,10 +19,10 @@ import cv2
 import numpy as np
 from absl import flags
 
-flags.DEFINE_string('source_dir', '/scratch1/storage/human36m_full_raw')
-flags.DEFINE_string('out_dir', '/scratch1/storage/human36m_25fps')
-flags.DEFINE_integer('frame_skip', 2)
-flags.DEFINE_integer('num_workers', None)
+flags.DEFINE_string('source_dir', '/scratch1/storage/human36m_full_raw', 'Human3.6M root directory')
+flags.DEFINE_string('out_dir', '/scratch1/storage/human36m_25fps', 'Output directory')
+flags.DEFINE_integer('frame_skip', 2, 'Frame subsampling factor')
+flags.DEFINE_integer('num_workers', None, 'Number of worker processes')
 
 FLAGS = flags.FLAGS
 
