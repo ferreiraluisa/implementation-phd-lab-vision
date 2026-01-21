@@ -340,18 +340,12 @@ def main(raw_data_root, output_root, frame_skip):
     # 5) Phone Talk, 6) Posing, 7) Buying, 8) Sitting,
     # 9) Sitting Down, 10) Smoking, 11) Taking Photo, 12) Waiting,
     # 13) Walking, 14) Walking Dog, 15) Walking Pair
-    # action_names = [
-    #     'Directions', 'Discussion', 'Eating', 'Greeting', 'Phoning', 'Posing',
-    #     'Purchases', 'Sitting', 'SittingDown', 'Smoking', 'TakingPhoto',
-    #     'Waiting', 'Walking', 'WakingDog', 'WalkTogether'
-    # ]
-    # sub_ids = [1, 6, 7, 8, 5, 9, 11]
     action_names = [
-        'Greeting', 'Phoning', 'Posing',
+        'Directions', 'Discussion', 'Eating', 'Greeting', 'Phoning', 'Posing',
         'Purchases', 'Sitting', 'SittingDown', 'Smoking', 'TakingPhoto',
         'Waiting', 'Walking', 'WakingDog', 'WalkTogether'
     ]
-    sub_ids = [1]
+    sub_ids = [1, 6, 7, 8, 5, 9, 11]
     
 
     n_frames = None
@@ -360,7 +354,7 @@ def main(raw_data_root, output_root, frame_skip):
     # Action, camera, suject id starts from 1 Matlab convention
     cam_ids = range(1, 5)
     trial_ids = [1, 2]
-    action_ids = range(1, 12)
+    action_ids = range(1, 16)
     import itertools
     all_pairs = [
         p
