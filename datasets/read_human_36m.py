@@ -360,7 +360,7 @@ def main(raw_data_root, output_root, frame_skip):
     # Action, camera, suject id starts from 1 Matlab convention
     cam_ids = range(1, 5)
     trial_ids = [1, 2]
-    action_ids = range(1, 16)
+    action_ids = range(1, 12)
     import itertools
     all_pairs = [
         p
@@ -425,29 +425,29 @@ def main(raw_data_root, output_root, frame_skip):
 
         # Check if we're done here.
         want_length = len(poses2d[::frame_skip])
-        written_images = glob(join(output_dir, '*.png'))
-        num_imgs_written = len(written_images)
-        if want_length == num_imgs_written:
-            is_done = True
-            for fname in written_images:
-                if getsize(fname) == 0:
-                    is_done = False
-                    break
-            if is_done:
-                print('Done!')
-                continue
+        # written_images = glob(join(output_dir, '*.png'))
+        # num_imgs_written = len(written_images)
+        # if want_length == num_imgs_written:
+        #     is_done = True
+        #     for fname in written_images:
+        #         if getsize(fname) == 0:
+        #             is_done = False
+        #             break
+        #     if is_done:
+        #         print('Done!')
+        #         continue
 
         # Write images..
-        print('reading images...')
-        imgs = read_frames(
-            video_paths[cam_id - 1],
-            frame_skip=frame_skip,
-            max_frames=len(poses2d)
-        )
-        # For some reason, len(poses2d) < len(imgs) by few frames sometimes
-        # len(poses2d) == len(poses3d) always.
-        # clip the images according to them..
-        imgs = imgs[:len(poses2d)]
+        # print('reading images...')
+        # imgs = read_frames(
+        #     video_paths[cam_id - 1],
+        #     frame_skip=frame_skip,
+        #     max_frames=len(poses2d)
+        # )
+        # # For some reason, len(poses2d) < len(imgs) by few frames sometimes
+        # # len(poses2d) == len(poses3d) always.
+        # # clip the images according to them..
+        # imgs = imgs[:len(poses2d)]
 
         # Subsample
         poses2d = poses2d[::frame_skip]
@@ -472,19 +472,19 @@ def main(raw_data_root, output_root, frame_skip):
                 import ipdb
                 ipdb.set_trace()
 
-        for i, (img) in enumerate(imgs):
-            if exists(join(output_dir, 'frame%04d.png' % i)):
-                if getsize(join(output_dir, 'frame%04d.png' % i)) > 0:
-                    continue
+        # for i, (img) in enumerate(imgs):
+        #     if exists(join(output_dir, 'frame%04d.png' % i)):
+        #         if getsize(join(output_dir, 'frame%04d.png' % i)) > 0:
+        #             continue
+        #     if i % 50 == 0:
+        #         import matplotlib.pyplot as plt
+        #         plt.ion()
+        #         plt.imshow(plot_points(poses2d[i], img)[:, :, ::-1])
+        #         plt.draw()
+        #         plt.pause(1e-3)
+        #     cv2.imwrite(join(output_dir, 'frame%04d.png' % i), img)
             # if i % 50 == 0:
-            #     import matplotlib.pyplot as plt
-            #     plt.ion()
-            #     plt.imshow(plot_points(poses2d[i], img)[:, :, ::-1])
-            #     plt.draw()
-            #     plt.pause(1e-3)
-            cv2.imwrite(join(output_dir, 'frame%04d.png' % i), img)
-            if i % 50 == 0:
-                print(join(output_dir, 'frame%04d.png' % i))
+            #     print(join(output_dir, 'frame%04d.png' % i))
 
 
 if __name__ == '__main__':
