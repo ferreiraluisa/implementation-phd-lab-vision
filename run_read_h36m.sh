@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --partition=A100medium     # GPU partition
+#SBATCH --partition=A40medium     # GPU partition
 #SBATCH --time=24:00:00           # max runtime (HH:MM:SS)
 #SBATCH --gpus=1                 # number of GPUs
 #SBATCH --ntasks=1               # number of CPU tasks
