@@ -199,18 +199,42 @@ def get_num_frames(path):
     return int(vid.get(cv2.CAP_PROP_FRAME_COUNT))
 
 
-def read_frames(path, n_frames=None):
-    vid = cv2.VideoCapture(path)
+# def read_frames(path, n_frames=None):
+#     vid = cv2.VideoCapture(path)
+
+#     imgs = []
+
+#     if n_frames is None:
+#         n_frames = int(vid.get(cv2.CAP_PROP_FRAME_COUNT))
+
+#     for _ in range(n_frames):
+#         success, img = vid.read()
+#         imgs.append(img)
+
+#     return imgs
+def read_frames(path, frame_skip=1, max_frames=None):
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        raise IOError(f"Could not open video: {path}")
 
     imgs = []
+    frame_idx = 0
+    kept = 0
 
-    if n_frames is None:
-        n_frames = int(vid.get(cv2.CAP_PROP_FRAME_COUNT))
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-    for _ in range(n_frames):
-        success, img = vid.read()
-        imgs.append(img)
+        if frame_idx % frame_skip == 0:
+            imgs.append(frame)
+            kept += 1
+            if max_frames is not None and kept >= max_frames:
+                break
 
+        frame_idx += 1
+
+    cap.release()
     return imgs
 
 
@@ -316,15 +340,22 @@ def main(raw_data_root, output_root, frame_skip):
     # 5) Phone Talk, 6) Posing, 7) Buying, 8) Sitting,
     # 9) Sitting Down, 10) Smoking, 11) Taking Photo, 12) Waiting,
     # 13) Walking, 14) Walking Dog, 15) Walking Pair
+    # action_names = [
+    #     'Directions', 'Discussion', 'Eating', 'Greeting', 'Phoning', 'Posing',
+    #     'Purchases', 'Sitting', 'SittingDown', 'Smoking', 'TakingPhoto',
+    #     'Waiting', 'Walking', 'WakingDog', 'WalkTogether'
+    # ]
+    # sub_ids = [1, 6, 7, 8, 5, 9, 11]
     action_names = [
-        'Directions', 'Discussion', 'Eating', 'Greeting', 'Phoning', 'Posing',
+        'Greeting', 'Phoning', 'Posing',
         'Purchases', 'Sitting', 'SittingDown', 'Smoking', 'TakingPhoto',
         'Waiting', 'Walking', 'WakingDog', 'WalkTogether'
     ]
+    sub_ids = [1]
+    
 
     n_frames = None
 
-    sub_ids = [1, 6, 7, 8, 5, 9, 11]
 
     # Action, camera, suject id starts from 1 Matlab convention
     cam_ids = range(1, 5)
@@ -408,14 +439,17 @@ def main(raw_data_root, output_root, frame_skip):
 
         # Write images..
         print('reading images...')
-        imgs = read_frames(video_paths[cam_id - 1], n_frames=n_frames)
+        imgs = read_frames(
+            video_paths[cam_id - 1],
+            frame_skip=frame_skip,
+            max_frames=len(poses2d)
+        )
         # For some reason, len(poses2d) < len(imgs) by few frames sometimes
         # len(poses2d) == len(poses3d) always.
         # clip the images according to them..
         imgs = imgs[:len(poses2d)]
 
         # Subsample
-        imgs = imgs[::frame_skip]
         poses2d = poses2d[::frame_skip]
         poses3d = poses3d[::frame_skip]
         gt_path = join(output_dir, 'gt_poses.pkl')
@@ -442,12 +476,12 @@ def main(raw_data_root, output_root, frame_skip):
             if exists(join(output_dir, 'frame%04d.png' % i)):
                 if getsize(join(output_dir, 'frame%04d.png' % i)) > 0:
                     continue
-            if i % 50 == 0:
-                import matplotlib.pyplot as plt
-                plt.ion()
-                plt.imshow(plot_points(poses2d[i], img)[:, :, ::-1])
-                plt.draw()
-                plt.pause(1e-3)
+            # if i % 50 == 0:
+            #     import matplotlib.pyplot as plt
+            #     plt.ion()
+            #     plt.imshow(plot_points(poses2d[i], img)[:, :, ::-1])
+            #     plt.draw()
+            #     plt.pause(1e-3)
             cv2.imwrite(join(output_dir, 'frame%04d.png' % i), img)
             if i % 50 == 0:
                 print(join(output_dir, 'frame%04d.png' % i))
