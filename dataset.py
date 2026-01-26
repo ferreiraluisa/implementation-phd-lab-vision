@@ -83,7 +83,7 @@ class Human36MPreprocessedClips(Dataset):
             for action in actions:
                 action_dir = os.path.join(subj_dir, action)
                 cam_dirs = sorted(glob.glob(os.path.join(action_dir, "cam_*")))
-                print(cam_dirs)
+                # print(cam_dirs)
 
                 for cam_dir in cam_dirs:
                     cam_name = os.path.basename(cam_dir)
