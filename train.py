@@ -130,7 +130,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--lr", type=float, default=LR)
     parser.add_argument("--epochs", type=int, default=EPOCHS)
-    parser.add_argument("--frame-skip", type=int, default=FRAME_SKIP, help="frame subsampling rate during video loading")
+    parser.add_argument("--frame_skip", type=int, default=FRAME_SKIP, help="frame subsampling rate during video loading")
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--stride", type=int, default=5, help="clip sampling stride in frames (dataset indexing)")
     parser.add_argument("--max-train-clips", type=int, default=None)
@@ -147,7 +147,7 @@ def main():
     # load data
     train_set = Human36MPreprocessedClips(
         root=args.root,
-        split="train",
+        subjects=[1, 6, 7, 8],
         seq_len=args.seq_len,
         frame_skip=args.frame_skip,
         stride=args.stride,
@@ -155,7 +155,7 @@ def main():
     )
     val_set = Human36MPreprocessedClips(
         root=args.root,
-        split="val",
+        split=[5],
         seq_len=args.seq_len,
         frame_skip=args.frame_skip,
         stride=max(1, args.stride),
