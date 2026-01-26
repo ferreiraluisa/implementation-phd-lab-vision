@@ -27,10 +27,6 @@ def _subject_id_from_name(subject_folder: str) -> int:
 
 
 def _load_gt_3d_as_T17x3(gt_path: str) -> torch.Tensor:
-    """
-    Loads gt_poses.pkl and returns joints as float32 tensor shaped (T, 17, 3).
-    Assumes pickle dict contains key '3d'.
-    """
     with open(gt_path, "rb") as f:
         data = pickle.load(f)
 
@@ -63,9 +59,9 @@ def _load_gt_3d_as_T17x3(gt_path: str) -> torch.Tensor:
 
 class Human36MPreprocessedClips(Dataset):
     """
-    Dataset returning:
       video:  (T,3,224,224) normalized for ImageNet/ResNet50
       joints: (T,17,3)
+      T: number of frames in the clip
     """
     def __init__(
         self,

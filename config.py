@@ -4,7 +4,7 @@ import torch
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # data params
-H36M_ROOT = "../Human3.6M"  # Path to Human3.6M dataset
+H36M_ROOT = "../Human3.6M_preprocessed"  # Path to Human3.6M dataset
 SEQ_LEN = 40               # total frames per sequence
 INPUT_LEN = 15             # Frames used to warm up the history
 PRED_LEN = 25              # Frames to predict (Paper predicts 25)
