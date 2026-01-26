@@ -3,7 +3,6 @@
 #SBATCH --time=8:00:00           # max runtime (HH:MM:SS)
 #SBATCH --gpus=1                 # number of GPUs
 #SBATCH --ntasks=1               # number of CPU tasks
-#SBATCH --nodes=3              # number of nodes
 #SBATCH --output=logs/train%j.out
 #SBATCH --error=logs/train%j.err
 
@@ -13,7 +12,7 @@ conda activate h36m
 which python
 python -V
 
-python train.py \
+python -u train.py \
   --seq-len 40 \
   --batch-size 16 \
   --lr 1e-4 \
