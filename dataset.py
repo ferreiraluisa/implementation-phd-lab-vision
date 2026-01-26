@@ -11,6 +11,7 @@ import torchvision
 from torchvision.transforms import v2 as T
 
 
+# store clip data, for each video of Human3.6M, create clips of fixed length
 @dataclass
 class ClipIndex:
     video_path: str
@@ -22,97 +23,58 @@ class ClipIndex:
     end: int  # exclusive
 
 
-def _subject_id_from_name(subject_folder: str) -> int:
-    return int(subject_folder.replace("S", "").strip())
-
-
-def _load_gt_3d_as_T17x3(gt_path: str) -> torch.Tensor:
+def _load_gt(gt_path: str) -> torch.Tensor:
     with open(gt_path, "rb") as f:
         data = pickle.load(f)
 
     arr = np.asarray(data["3d"])
-
-    # Make it (T,17,3)
-    if arr.ndim != 3:
-        raise ValueError(f"Expected 3D array for data['3d'], got shape {arr.shape}")
-
-    if arr.shape[-2:] == (17, 3):
-        # (T,17,3)
-        pass
-    elif arr.shape[:2] == (17, 3):
-        # (17,3,T) -> (T,17,3)
-        arr = np.transpose(arr, (2, 0, 1))
-    elif arr.shape[:2] == (3, 17):
-        # (3,17,T) -> (T,17,3)
-        arr = np.transpose(arr, (2, 1, 0))
-    elif arr.shape[-2:] == (3, 17):
-        # (T,3,17) -> (T,17,3)
-        arr = np.transpose(arr, (0, 2, 1))
-    else:
-        raise ValueError(
-            f"Don't know how to interpret data['3d'] shape {arr.shape}. "
-            "Expected (T,17,3) or (17,3,T) (or common variants)."
-        )
+    # arr shape = (T,17,3)
 
     return torch.from_numpy(arr).float()
 
-
+# -----------------------------
+# pytorch dataset that returns fixed-length clips from Human3.6M preprocessed
+# video:  (T,3,224,224) normalized for ImageNet/ResNet50
+# joints: (T,17,3)
+# T: number of frames in the clip
+# -----------------------------
 class Human36MPreprocessedClips(Dataset):
-    """
-      video:  (T,3,224,224) normalized for ImageNet/ResNet50
-      joints: (T,17,3)
-      T: number of frames in the clip
-    """
     def __init__(
         self,
         root: str,
-        split: str,
+        subjects: List[int],
         seq_len: int = 40,
-        stride: int = 1,
-        cams: Optional[List[int]] = None,   # e.g. [0,1,2,3]
-        resize: int = 224,
+        stride: int = 10,
+        frame_skip: int = 2,
+        cams: Optional[List[int]] = None,   
+        resize: int = 224, # imageNet size
         center_crop: bool = True,
-        return_meta: bool = True,
         max_clips: Optional[int] = None,
     ):
         super().__init__()
-        assert split in {"train", "val", "test"}
 
         self.root = root
-        self.split = split
+        self.subjects = subjects
         self.seq_len = seq_len
         self.stride = stride
-        self.return_meta = return_meta
+        self.frame_skip = frame_skip
 
-        split_subjects = {
-            "train": {1, 6, 7, 8},
-            "val": {5},
-            "test": {9, 11},
-        }[split]
-
-        tx = [T.Resize(resize)]
+        tx = [T.Resize(resize)] # torchvision.transforms.v2
+        # video tensor from read_video is (T,C,H,W) to match (T,3,224,224)
         if center_crop:
             tx.append(T.CenterCrop(resize))
         tx += [
             T.ToDtype(torch.float32, scale=True),  # uint8 -> float [0,1]
-            T.Normalize(mean=(0.485, 0.456, 0.406),
+            T.Normalize(mean=(0.485, 0.456, 0.406), # normalize for ImageNet/ResNet50
                         std=(0.229, 0.224, 0.225)),
         ]
         self.frame_tf = T.Compose(tx)
 
         self.index: List[ClipIndex] = []
 
-        subjects = sorted(
-            d for d in os.listdir(root)
-            if d.startswith("S") and os.path.isdir(os.path.join(root, d))
-        )
-
         for s in subjects:
-            sid = _subject_id_from_name(s)
-            if sid not in split_subjects:
-                continue
-
-            subj_dir = os.path.join(root, s)
+            subj_dir = os.path.join(root, f"S{s}")
+            # print(subj_dir)
             actions = sorted(
                 a for a in os.listdir(subj_dir)
                 if os.path.isdir(os.path.join(subj_dir, a))
@@ -121,6 +83,7 @@ class Human36MPreprocessedClips(Dataset):
             for action in actions:
                 action_dir = os.path.join(subj_dir, action)
                 cam_dirs = sorted(glob.glob(os.path.join(action_dir, "cam_*")))
+                print(cam_dirs)
 
                 for cam_dir in cam_dirs:
                     cam_name = os.path.basename(cam_dir)
@@ -135,9 +98,9 @@ class Human36MPreprocessedClips(Dataset):
 
                     video_path = mp4s[0]
 
-                    # Use GT length as number of frames (assumes aligned)
-                    joints_all = _load_gt_3d_as_T17x3(gt_path)
-                    n_frames = int(joints_all.shape[0])
+                    
+                    joints_all = _load_gt(gt_path)
+                    n_frames = int(joints_all.shape[0]) # total frames from gt
 
                     for start in range(0, n_frames - seq_len + 1, stride):
                         self.index.append(
@@ -151,6 +114,7 @@ class Human36MPreprocessedClips(Dataset):
                                 end=start + seq_len,
                             )
                         )
+                        # avoid building too large dataset
                         if max_clips is not None and len(self.index) >= max_clips:
                             break
                     if max_clips is not None and len(self.index) >= max_clips:
@@ -169,9 +133,9 @@ class Human36MPreprocessedClips(Dataset):
     def _read_video_clip(self, video_path: str, start: int, end: int) -> torch.Tensor:
         # frames: (Tv,H,W,C) uint8
         frames, _, _ = torchvision.io.read_video(video_path, pts_unit="sec")
+        frames = frames[::self.frame_skip]  # subsample
         frames = frames[start:end]
         if frames.shape[0] != (end - start):
-            # Not fatal, but highlights mismatch/decoding issues
             raise RuntimeError(
                 f"Frame count mismatch reading {video_path}: "
                 f"got {frames.shape[0]}, expected {end-start} for slice [{start}:{end}]."
@@ -184,19 +148,7 @@ class Human36MPreprocessedClips(Dataset):
         ci = self.index[idx]
 
         video = self._read_video_clip(ci.video_path, ci.start, ci.end)  # (T,3,224,224)
-        joints_all = _load_gt_3d_as_T17x3(ci.gt_path)                   # (N,17,3)
+        joints_all = _load_gt(ci.gt_path)                   # (N,17,3)
         joints = joints_all[ci.start:ci.end]                             # (T,17,3)
-
-        if self.return_meta:
-            meta = {
-                "subject": ci.subject,
-                "action": ci.action,
-                "cam": ci.cam,
-                "video_path": ci.video_path,
-                "gt_path": ci.gt_path,
-                "start": ci.start,
-                "end": ci.end,
-            }
-            return video, joints, meta
 
         return video, joints
