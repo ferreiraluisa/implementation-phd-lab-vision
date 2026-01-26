@@ -31,6 +31,7 @@ import cv2
 import numpy as np
 
 from absl import flags
+from config import FRAME_SKIP
 
 
 flags.DEFINE_string(
