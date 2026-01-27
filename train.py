@@ -155,7 +155,7 @@ def main():
     )
     val_set = Human36MPreprocessedClips(
         root=args.root,
-        split=[5],
+        subjects=[5],
         seq_len=args.seq_len,
         frame_skip=args.frame_skip,
         stride=max(1, args.stride),
