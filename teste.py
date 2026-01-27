@@ -3,14 +3,14 @@ import torch
 from torch.utils.data import DataLoader
 from dataset import Human36MPreprocessedClips
 
-root = "Human3.6M_preprocessed"
+root = "../Human3.6M_preprocessed"
 
 train_ds = Human36MPreprocessedClips(
     root,
     subjects=[1],
     seq_len=40,
-    stride=5,
-    frame_skip=1
+    stride=10,
+    frame_skip=2
 )
 
 train_dl = DataLoader(
