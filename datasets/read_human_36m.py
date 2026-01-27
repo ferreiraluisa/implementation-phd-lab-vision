@@ -31,7 +31,6 @@ import cv2
 import numpy as np
 
 from absl import flags
-from config import FRAME_SKIP
 
 
 flags.DEFINE_string(
@@ -40,7 +39,7 @@ flags.DEFINE_string(
 )
 flags.DEFINE_string('out_dir', '/scratch1/storage/human36m_25fps',
                     'Output directory')
-flags.DEFINE_integer('frame_skip', FRAME_SKIP,
+flags.DEFINE_integer('frame_skip', 2,
                      'subsample factor, 5 corresponds to 10fps, 2=25fps')
 
 FLAGS = flags.FLAGS
