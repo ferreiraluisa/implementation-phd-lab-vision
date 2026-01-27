@@ -46,12 +46,19 @@ class Human36MPreprocessedClips(Dataset):
         seq_len: int = 40,
         stride: int = 10,
         frame_skip: int = 2,
-        cams: Optional[List[int]] = None,   
+        cams: Optional[List[int]] = None,
         resize: int = 224, # imageNet size
         center_crop: bool = True,
         max_clips: Optional[int] = None,
     ):
         super().__init__()
+
+        if frame_skip < 1:
+            raise ValueError("frame_skip must be >= 1")
+        if seq_len < 1:
+            raise ValueError("seq_len must be >= 1")
+        if stride < 1:
+            raise ValueError("stride must be >= 1")
 
         self.root = root
         self.subjects = subjects
@@ -98,11 +105,13 @@ class Human36MPreprocessedClips(Dataset):
 
                     video_path = mp4s[0]
 
-                    
                     joints_all = _load_gt(gt_path)
                     n_frames = int(joints_all.shape[0]) # total frames from gt
 
-                    for start in range(0, n_frames - seq_len + 1, stride):
+                    # IMPORTANT: start/end are in the SUBSAMPLED timeline (same as video after frame_skip)
+                    n_frames_sub = (n_frames + self.frame_skip - 1) // self.frame_skip
+
+                    for start in range(0, n_frames_sub - seq_len + 1, stride):
                         self.index.append(
                             ClipIndex(
                                 video_path=video_path,
@@ -133,13 +142,17 @@ class Human36MPreprocessedClips(Dataset):
     def _read_video_clip(self, video_path: str, start: int, end: int) -> torch.Tensor:
         # frames: (Tv,H,W,C) uint8
         frames, _, _ = torchvision.io.read_video(video_path, pts_unit="sec")
+
+        # start/end are in subsampled coords, so subsample first, then slice
         frames = frames[::self.frame_skip]  # subsample
         frames = frames[start:end]
+
         if frames.shape[0] != (end - start):
             raise RuntimeError(
                 f"Frame count mismatch reading {video_path}: "
                 f"got {frames.shape[0]}, expected {end-start} for slice [{start}:{end}]."
             )
+
         frames = frames.permute(0, 3, 1, 2)  # (T,C,H,W)
         frames = self.frame_tf(frames)       # batched transform
         return frames
@@ -148,7 +161,24 @@ class Human36MPreprocessedClips(Dataset):
         ci = self.index[idx]
 
         video = self._read_video_clip(ci.video_path, ci.start, ci.end)  # (T,3,224,224)
-        joints_all = _load_gt(ci.gt_path)                   # (N,17,3)
-        joints = joints_all[ci.start:ci.end]                             # (T,17,3)
+
+        joints_all = _load_gt(ci.gt_path)  # (N,17,3)
+
+        # Map subsampled indices back to original indices to guarantee alignment
+        # (video is frames[::frame_skip][start:end] => original indices are (start..end-1)*frame_skip)
+        orig_idx = torch.arange(ci.start, ci.end, dtype=torch.long) * self.frame_skip
+
+        if int(orig_idx[-1]) >= joints_all.shape[0]:
+            raise RuntimeError(
+                f"Joint index out of range for {ci.gt_path}: "
+                f"max orig_idx={int(orig_idx[-1])}, n_frames={joints_all.shape[0]}"
+            )
+
+        joints = joints_all[orig_idx]  # (T,17,3)
+
+        # assert video and joints has are representing the same frames
+        assert video.shape[0] == joints.shape[0], (
+            f"Mismatch T: video {video.shape[0]} vs joints {joints.shape[0]}"
+        )
 
         return video, joints
