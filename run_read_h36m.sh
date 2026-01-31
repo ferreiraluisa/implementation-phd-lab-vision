@@ -13,6 +13,6 @@ conda activate h36m
 which python
 python -V
 
-python /home/s26ldeso/implementation-phd-lab-vision/datasets/read_human_36m.py \
+python /home/s26ldeso/implementation-phd-lab-vision/src/datasets/read_human_36m.py \
     --source_dir /home/s26ldeso/Human3.6 \
     --out_dir /home/s26ldeso/Human3.6M_preprocessed 

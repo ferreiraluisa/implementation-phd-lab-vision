@@ -12,4 +12,4 @@ conda activate h36m
 which python
 python -V
 
-python -u teste.py 
+python -u src/teste.py 

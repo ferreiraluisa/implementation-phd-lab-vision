@@ -15,8 +15,8 @@ Then run:
 python -m src.datasets.h36.read_human36m
 
 Originally developed by Federica Bogo, edited by Angjoo Kanazawa
-
-ATTENTION!!! CODE FROM https://github.com/akanazawa/human_dynamics/blob/master/src/datasets/h36/read_human36m.py#L449
+https://github.com/akanazawa/human_dynamics/blob/master/src/datasets/h36/read_human36m.py#L449
+with some adaptations.
 """
 
 from glob import glob
@@ -39,7 +39,7 @@ flags.DEFINE_string(
 )
 flags.DEFINE_string('out_dir', '/scratch1/storage/human36m_25fps',
                     'Output directory')
-flags.DEFINE_integer('frame_skip', 2,
+flags.DEFINE_integer('frame_skip', 1,
                      'subsample factor, 5 corresponds to 10fps, 2=25fps')
 
 FLAGS = flags.FLAGS
@@ -65,54 +65,117 @@ _COMMON_JOINT_IDS = np.array([
     10,  # Head top
 ])
 
+## functions not used in my version
 
-def plot_points(points_, img, points0_=None, radius=10):
-    global colors
-    tmp_img = img.copy()
+# def plot_points(points_, img, points0_=None, radius=10):
+#     global colors
+#     tmp_img = img.copy()
 
-    num_colors = len(colors)
+#     num_colors = len(colors)
 
-    points = points_.T if points_.shape[0] == 2 else points_
-    points0 = None if points0_ is None else (points0_.T
-                                             if points0_.shape[0] == 2 else
-                                             points0_)
+#     points = points_.T if points_.shape[0] == 2 else points_
+#     points0 = None if points0_ is None else (points0_.T
+#                                              if points0_.shape[0] == 2 else
+#                                              points0_)
 
-    for i, coord in enumerate(points.astype(int)):
-        if coord[0] < img.shape[1] and coord[1] < img.shape[0] and coord[0] > 0 and coord[1] > 0:
-            cv2.circle(tmp_img,
-                       tuple(coord), radius, colors[i % num_colors].tolist(),
-                       -1)
+#     for i, coord in enumerate(points.astype(int)):
+#         if coord[0] < img.shape[1] and coord[1] < img.shape[0] and coord[0] > 0 and coord[1] > 0:
+#             cv2.circle(tmp_img,
+#                        tuple(coord), radius, colors[i % num_colors].tolist(),
+#                        -1)
 
-    if points0 is not None:
-        for i, coord in enumerate(points0.astype(int)):
-            if coord[0] < img.shape[1] and coord[1] < img.shape[0] and coord[0] > 0 and coord[1] > 0:
-                cv2.circle(tmp_img,
-                           tuple(coord), radius + 2,
-                           colors[i % num_colors].tolist(), 2)
+#     if points0 is not None:
+#         for i, coord in enumerate(points0.astype(int)):
+#             if coord[0] < img.shape[1] and coord[1] < img.shape[0] and coord[0] > 0 and coord[1] > 0:
+#                 cv2.circle(tmp_img,
+#                            tuple(coord), radius + 2,
+#                            colors[i % num_colors].tolist(), 2)
 
-    return tmp_img
+#     return tmp_img
 
+# def read_frames(path, n_frames=None):
+#     vid = cv2.VideoCapture(path)
 
-def rotation_matrix(args):
+#     imgs = []
 
-    (x, y, z) = args
+#     if n_frames is None:
+#         n_frames = int(vid.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    X = np.vstack([[1, 0, 0], [0, np.cos(x), -np.sin(x)],
-                   [0, np.sin(x), np.cos(x)]])
-    Y = np.vstack([[np.cos(y), 0, np.sin(y)], [0, 1, 0],
-                   [-np.sin(y), 0, np.cos(y)]])
-    Z = np.vstack([[np.cos(z), -np.sin(z), 0], [np.sin(z),
-                                                np.cos(z), 0], [0, 0, 1]])
+#     for _ in range(n_frames):
+#         success, img = vid.read()
+#         imgs.append(img)
 
-    return (X.dot(Y)).dot(Z)
+#     return imgs
 
+# def get_num_frames(path):
+#     vid = cv2.VideoCapture(path)
+#     return int(vid.get(cv2.CAP_PROP_FRAME_COUNT))
+
+# (LUISA) they dont even use this functions in original code.
+def compute_fua_joints(joints, new_root_joint, in_meter=False):
+    new_joints = np.zeros_like(joints)
+
+    new_joints[0, :] = new_root_joint
+
+    for i, offset in enumerate(joints[1:]):
+        new_joints[i + 1] = new_root_joint + offset
+
+    if in_meter:
+        new_joints = np.vstack([j / 1000. for j in new_joints])
+
+    return new_joints
+
+def crop_image(silhs):
+    res = np.asarray(silhs).any(axis=0)
+    cnts, hier = cv2.findContours(
+        np.uint8(res) * 255, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    """
+    checks = []
+    for cnt in cnts:
+        kk = np.zeros((1000, 1000, 3), dtype=np.uint8)
+        hull = cv2.convexHull(cnt)
+        cv2.drawContours(kk, [cnt], 0, (255,255,255), -1)
+        checks.append(kk)
+    """
+
+    max_id = 0
+    max_length = len(cnts[0])
+    for i in range(1, len(cnts)):
+        if len(cnts[i]) > max_length:
+            max_id = i
+            max_length = len(cnts[i])
+
+    (x, y, w, h) = cv2.boundingRect(cnts[max_id])
+    return (x, y, w, h)
+
+def crop_and_clean_mask_to_int(mask, x, y, w, h):
+    mask = np.uint8(mask[y:y + h, x:x + w]) * 255
+
+    # TODO: put this into a function (it's used above as well)
+    cnts, hier = cv2.findContours(mask.copy(), cv2.RETR_LIST,
+                                  cv2.CHAIN_APPROX_SIMPLE)
+
+    max_id = 0
+    max_length = len(cnts[0])
+    for i in range(1, len(cnts)):
+        if len(cnts[i]) > max_length:
+            max_id = i
+            max_length = len(cnts[i])
+
+    tmp_mask = np.dstack((mask, mask, mask))
+    for i, cnt in enumerate(cnts):
+        if i != max_id:
+            cv2.drawContours(tmp_mask, [cnt], 0, (0, 0, 0), -1)
+    return cv2.split(tmp_mask)[0]
 
 def project_point_radial(P, R, t, f, c, all_k):
-    k = np.array(list(all_k[:2]) + list(all_k[-1:]))
-    p = all_k[2:4]
+    # (LUISA) project 3D points to 2D pixel coordinates 
+    k = np.array(list(all_k[:2]) + list(all_k[-1:])) # L: radial distortion coeffs
+    p = all_k[2:4] # L: tangential distortion coeffs
 
-    N = P.shape[0]
+    N = P.shape[0] 
 
+    # L: P_camera = R * (P_world - t)
     X = R.dot(P.T - np.tile(t.reshape((-1, 1)), (1, len(P))))
 
     XX = X[:2, :] / np.tile(X[2, :], (2, 1))
@@ -127,8 +190,47 @@ def project_point_radial(P, R, t, f, c, all_k):
         (-1, 1)).dot(r2.reshape((1, -1)))
 
     proj = (np.tile(f, (N, 1)) * XXX.T) + np.tile(c, (N, 1))
-    return proj
+    return proj # L: (N, 2)
 
+def read_fua_results(path, sbj_id, trial_id, cam_id):
+    from scipy.io import loadmat
+
+    # sbj_id already follows the standard convention
+    choose_id = sbj_id * (2 * 4) + (trial_id - 1) * 4 + (cam_id - 1)
+    print(choose_id)
+    res = loadmat(path)
+    joints = res['Pred'].squeeze()
+    return [j.reshape((-1, 3)) for j in joints[choose_id]]
+
+def read_silhouettes(path, n_frames=None):
+    #(LUISA) read silhouettes from h5 file(?) did not find this file on the dataset
+    import h5py
+    f = h5py.File(path, 'r')
+    refs = f['Masks']
+    masks = []
+
+    if n_frames is None:
+        n_frames = len(refs)
+
+    for i in range(n_frames):
+        mask = np.array(f[refs[i, 0]], dtype=bool)
+        mask = np.fliplr(np.rot90(mask, 3))
+        masks.append(mask)
+    return masks
+###########
+
+def rotation_matrix(args):
+
+    (x, y, z) = args
+
+    X = np.vstack([[1, 0, 0], [0, np.cos(x), -np.sin(x)],
+                   [0, np.sin(x), np.cos(x)]])
+    Y = np.vstack([[np.cos(y), 0, np.sin(y)], [0, 1, 0],
+                   [-np.sin(y), 0, np.cos(y)]])
+    Z = np.vstack([[np.cos(z), -np.sin(z), 0], [np.sin(z),
+                                                np.cos(z), 0], [0, 0, 1]])
+
+    return (X.dot(Y)).dot(Z)
 
 def read_cam_parameters(xml_path, sbj_id, cam_id):
     import xml.etree.ElementTree
@@ -183,75 +285,6 @@ def read_action_name(xml_path, sbj_id, actionno, trialno):
                         return tr.getchildren()[2 + sbj_id - 1].text
 
 
-def read_fua_results(path, sbj_id, trial_id, cam_id):
-    from scipy.io import loadmat
-
-    # sbj_id already follows the standard convention
-    choose_id = sbj_id * (2 * 4) + (trial_id - 1) * 4 + (cam_id - 1)
-    print(choose_id)
-    res = loadmat(path)
-    joints = res['Pred'].squeeze()
-    return [j.reshape((-1, 3)) for j in joints[choose_id]]
-
-
-def get_num_frames(path):
-    vid = cv2.VideoCapture(path)
-    return int(vid.get(cv2.CAP_PROP_FRAME_COUNT))
-
-
-# def read_frames(path, n_frames=None):
-#     vid = cv2.VideoCapture(path)
-
-#     imgs = []
-
-#     if n_frames is None:
-#         n_frames = int(vid.get(cv2.CAP_PROP_FRAME_COUNT))
-
-#     for _ in range(n_frames):
-#         success, img = vid.read()
-#         imgs.append(img)
-
-#     return imgs
-def read_frames(path, frame_skip=1, max_frames=None):
-    cap = cv2.VideoCapture(path)
-    if not cap.isOpened():
-        raise IOError(f"Could not open video: {path}")
-
-    imgs = []
-    frame_idx = 0
-    kept = 0
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        if frame_idx % frame_skip == 0:
-            imgs.append(frame)
-            kept += 1
-            if max_frames is not None and kept >= max_frames:
-                break
-
-        frame_idx += 1
-
-    cap.release()
-    return imgs
-
-
-def read_silhouettes(path, n_frames=None):
-    import h5py
-    f = h5py.File(path, 'r')
-    refs = f['Masks']
-    masks = []
-
-    if n_frames is None:
-        n_frames = len(refs)
-
-    for i in range(n_frames):
-        mask = np.array(f[refs[i, 0]], dtype=bool)
-        mask = np.fliplr(np.rot90(mask, 3))
-        masks.append(mask)
-    return masks
 
 
 def read_poses(path, n_frames=None, is_3d=False, joint_ids=range(32)):
@@ -273,64 +306,6 @@ def read_poses(path, n_frames=None, is_3d=False, joint_ids=range(32)):
     return packed_poses
 
 
-def compute_fua_joints(joints, new_root_joint, in_meter=False):
-    new_joints = np.zeros_like(joints)
-
-    new_joints[0, :] = new_root_joint
-
-    for i, offset in enumerate(joints[1:]):
-        new_joints[i + 1] = new_root_joint + offset
-
-    if in_meter:
-        new_joints = np.vstack([j / 1000. for j in new_joints])
-
-    return new_joints
-
-
-def crop_image(silhs):
-    res = np.asarray(silhs).any(axis=0)
-    cnts, hier = cv2.findContours(
-        np.uint8(res) * 255, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    """
-    checks = []
-    for cnt in cnts:
-        kk = np.zeros((1000, 1000, 3), dtype=np.uint8)
-        hull = cv2.convexHull(cnt)
-        cv2.drawContours(kk, [cnt], 0, (255,255,255), -1)
-        checks.append(kk)
-    """
-
-    max_id = 0
-    max_length = len(cnts[0])
-    for i in range(1, len(cnts)):
-        if len(cnts[i]) > max_length:
-            max_id = i
-            max_length = len(cnts[i])
-
-    (x, y, w, h) = cv2.boundingRect(cnts[max_id])
-    return (x, y, w, h)
-
-
-def crop_and_clean_mask_to_int(mask, x, y, w, h):
-    mask = np.uint8(mask[y:y + h, x:x + w]) * 255
-
-    # TODO: put this into a function (it's used above as well)
-    cnts, hier = cv2.findContours(mask.copy(), cv2.RETR_LIST,
-                                  cv2.CHAIN_APPROX_SIMPLE)
-
-    max_id = 0
-    max_length = len(cnts[0])
-    for i in range(1, len(cnts)):
-        if len(cnts[i]) > max_length:
-            max_id = i
-            max_length = len(cnts[i])
-
-    tmp_mask = np.dstack((mask, mask, mask))
-    for i, cnt in enumerate(cnts):
-        if i != max_id:
-            cv2.drawContours(tmp_mask, [cnt], 0, (0, 0, 0), -1)
-    return cv2.split(tmp_mask)[0]
-
 
 def main(raw_data_root, output_root, frame_skip):
     xml_path = join(raw_data_root, 'metadata.xml')
@@ -345,11 +320,10 @@ def main(raw_data_root, output_root, frame_skip):
         'Purchases', 'Sitting', 'SittingDown', 'Smoking', 'TakingPhoto',
         'Waiting', 'Walking', 'WakingDog', 'WalkTogether'
     ]
-    sub_ids = [1, 6, 7, 8, 5, 9, 11]
-    
 
     n_frames = None
 
+    sub_ids = [1, 6, 7, 8, 5, 9, 11]
 
     # Action, camera, suject id starts from 1 Matlab convention
     cam_ids = range(1, 5)
@@ -384,7 +358,7 @@ def main(raw_data_root, output_root, frame_skip):
 
         if not exists(output_dir):
             makedirs(output_dir)
-
+        # (LUISA) basically creating the folder structure and output file and getting files from dataset 
         # Save orig name
         name_path = join(output_base, 'orig_seq_name.txt')
         if not exists(name_path):
@@ -405,6 +379,8 @@ def main(raw_data_root, output_root, frame_skip):
                      'MyPoseFeatures/D3_Positions_mono',
                      '%s.*cdf' % seq_name)))
 
+        # (LUISA) here they read camera parameters from xml file, return rotation, translation, focal length, center, distortion coeffs
+        # and it is saved in a pickle file
         (rot, t, flen, c, k) = read_cam_parameters(xml_path, sbj_id, cam_id)
         cam_path = join(output_dir, 'camera_wext.pkl')
         print('Writing %s' % cam_path)
@@ -418,7 +394,7 @@ def main(raw_data_root, output_root, frame_skip):
             pose3d_paths[cam_id - 1], is_3d=True, joint_ids=joint_ids)
 
         # Check if we're done here.
-        want_length = len(poses2d[::frame_skip])
+        # want_length = len(poses2d[::frame_skip])
         # written_images = glob(join(output_dir, '*.png'))
         # num_imgs_written = len(written_images)
         # if want_length == num_imgs_written:
@@ -433,17 +409,14 @@ def main(raw_data_root, output_root, frame_skip):
 
         # Write images..
         # print('reading images...')
-        # imgs = read_frames(
-        #     video_paths[cam_id - 1],
-        #     frame_skip=frame_skip,
-        #     max_frames=len(poses2d)
-        # )
+        # imgs = read_frames(video_paths[cam_id - 1], n_frames=n_frames)
         # # For some reason, len(poses2d) < len(imgs) by few frames sometimes
         # # len(poses2d) == len(poses3d) always.
         # # clip the images according to them..
         # imgs = imgs[:len(poses2d)]
 
         # Subsample
+        # imgs = imgs[::frame_skip]
         poses2d = poses2d[::frame_skip]
         poses3d = poses3d[::frame_skip]
         gt_path = join(output_dir, 'gt_poses.pkl')
@@ -477,8 +450,8 @@ def main(raw_data_root, output_root, frame_skip):
         #         plt.draw()
         #         plt.pause(1e-3)
         #     cv2.imwrite(join(output_dir, 'frame%04d.png' % i), img)
-            # if i % 50 == 0:
-            #     print(join(output_dir, 'frame%04d.png' % i))
+        #     if i % 50 == 0:
+        #         print(join(output_dir, 'frame%04d.png' % i))
 
 
 if __name__ == '__main__':
