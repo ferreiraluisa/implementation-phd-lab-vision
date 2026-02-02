@@ -39,8 +39,6 @@ flags.DEFINE_string(
 )
 flags.DEFINE_string('out_dir', '/scratch1/storage/human36m_25fps',
                     'Output directory')
-flags.DEFINE_integer('frame_skip', 1,
-                     'subsample factor, 5 corresponds to 10fps, 2=25fps')
 
 FLAGS = flags.FLAGS
 
@@ -307,7 +305,7 @@ def read_poses(path, n_frames=None, is_3d=False, joint_ids=range(32)):
 
 
 
-def main(raw_data_root, output_root, frame_skip):
+def main(raw_data_root, output_root):
     xml_path = join(raw_data_root, 'metadata.xml')
 
     # <actionno> for each different action class:
@@ -416,9 +414,8 @@ def main(raw_data_root, output_root, frame_skip):
         # imgs = imgs[:len(poses2d)]
 
         # Subsample
-        # imgs = imgs[::frame_skip]
-        poses2d = poses2d[::frame_skip]
-        poses3d = poses3d[::frame_skip]
+        poses2d = poses2d
+        poses3d = poses3d
         gt_path = join(output_dir, 'gt_poses.pkl')
         if not exists(gt_path):
             with open(gt_path, 'wb') as fgt:
@@ -456,9 +453,8 @@ def main(raw_data_root, output_root, frame_skip):
 
 if __name__ == '__main__':
     FLAGS(sys.argv)
-    frame_skip = FLAGS.frame_skip
     raw_data_root = FLAGS.source_dir
     output_root = FLAGS.out_dir
 
-    main(raw_data_root, output_root, frame_skip)
+    main(raw_data_root, output_root)
     

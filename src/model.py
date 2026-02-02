@@ -78,10 +78,11 @@ class CausalTemporalNet(nn.Module):
 #
 # I've adapted it to output 17 joints * 3D = 51D. (instead of SMPL parameters Θ = {θ,β,R,t,s})
 class JointRegressor(nn.Module):
-    def __init__(self, latent_dim=2048, joints_num=17, iters=3, dropout=0.5):
+    def __init__(self, latent_dim=2048, joints_num=17, iters=3, dropout=0.5, camera_params=False):
         super().__init__()
         self.joints_num = joints_num
-        self.out_dim = joints_num * 3 # 51D output
+        self.cam = 3 if camera_params else 0
+        self.out_dim = joints_num * 3 + self.cam # 51D output + camera params (s, tx, ty) if needed
         self.iters = iters
 
         self.mlp = nn.Sequential(
@@ -140,9 +141,9 @@ class PHDFor3DJoints(nn.Module):
         self.f_AR = CausalTemporalNet(latent_dim)
         self.f_3D = JointRegressor(latent_dim, joints_num)
 
-    @torch.no_grad()
+    @torch.no_grad() # resnet must not be trained
     def extract_features(self, video):
-        # video: (B, T, C, H, W) ?? DATA PROCESSING I DONT KNOW ???
+        # video: (B, T, C, H, W) batch_size, frames, channels, height, width
         B, T, C, H, W = video.shape
         x = video.view(B * T, C, H, W)
         feats = self.backbone(x)          
@@ -163,8 +164,8 @@ class PHDFor3DJoints(nn.Module):
         if predict_future:
             joints_hat = self.f_3D(phi_hat)
 
-        # phi : teacher movie strips (B,T,D)
-        # phi_hat : predicted movie strips (B,T,D)
+        # phi : teacher movie strips (B,T,D) batch_size, time, latent_dim
+        # phi_hat : predicted movie strips (B,T,D) batch_size, time, latent_dim
         # joints_phi : joints from phi
         # joints_hat : joints from phi_hat (optional)
         return phi, phi_hat, joints_phi, joints_hat

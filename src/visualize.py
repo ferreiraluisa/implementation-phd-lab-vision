@@ -3,6 +3,11 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
+"""
+This code provides visualization functions for 3D human pose data. Only video sequence + 3D plot
+Coded by Luisa Ferreira, 2026.
+"""
+
 H36M_EDGES = [
     (0,1),(1,2),(2,3),
     (0,4),(4,5),(5,6),
@@ -15,25 +20,16 @@ IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 def to_uint8_rgb(frame_chw: np.ndarray) -> np.ndarray:
-    """
-    frame_chw: (3,H,W) either:
-      - uint8 [0..255]
-      - float [0..1]
-      - float normalized by ImageNet (roughly [-2..2])
-    returns HWC uint8 RGB.
-    """
+    # getting frame back to uint8 RGB for visualization(it was normalized for ResNet)
     f = frame_chw.astype(np.float32)
 
-    # Heuristic: if values look normalized, unnormalize
     if f.min() < -0.5 or f.max() > 1.5:
-        # assume ImageNet normalized
-        f = np.transpose(f, (1, 2, 0))             # HWC
-        f = (f * IMAGENET_STD) + IMAGENET_MEAN     # back to [0..1]
+        f = np.transpose(f, (1, 2, 0))             
+        f = (f * IMAGENET_STD) + IMAGENET_MEAN     
         f = np.clip(f, 0.0, 1.0)
         f = (f * 255.0).astype(np.uint8)
         return f
 
-    # not normalized: [0..1] or [0..255]
     if f.max() <= 1.5:
         f = f * 255.0
     f = np.clip(f, 0, 255).astype(np.uint8)
@@ -53,6 +49,7 @@ def plot_batch_sample(video, joints, sample_idx=0, fps=10):
 
     xs, ys, zs = js[...,0], js[...,1], js[...,2]
 
+    # define limits of plot with padding so the joints are not to tight to borders
     def pad(a,b,p=0.05):
         r = b-a if b>a else 1.0
         return a-p*r, b+p*r
@@ -73,6 +70,8 @@ def plot_batch_sample(video, joints, sample_idx=0, fps=10):
     ax_3d.set_ylim(*ylim)
     ax_3d.set_zlim(*zlim)
     ax_3d.set_title("Skeleton 3D")
+
+    ax_3d.view_init(elev=45, azim=-90) # just change the view angle
 
     scat = ax_3d.scatter(js[0,:,0], js[0,:,1], js[0,:,2], s=20)
 
