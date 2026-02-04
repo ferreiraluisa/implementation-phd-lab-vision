@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --partition=A100medium    # GPU partition
 #SBATCH --time=24:00:00           # max runtime (HH:MM:SS)
-#SBATCH --gpus=1                 # number of GPUs
+#SBATCH --gpus=4                 # number of GPUs
 #SBATCH --ntasks=1               # number of CPU tasks
 #SBATCH --output=logs/preprocess.out
 #SBATCH --error=logs/preprocess.err
@@ -11,6 +11,8 @@ conda activate h36m
 
 which python
 python -V
+
+nvidia-smi
 
 python -u src/preprocess_resnet_features.py \
   --root /home/s26ldeso/Human3.6M_preprocessed \
