@@ -3,8 +3,8 @@
 #SBATCH --time=24:00:00           # max runtime (HH:MM:SS)
 #SBATCH --gpus=1                 # number of GPUs
 #SBATCH --ntasks=1               # number of CPU tasks
-#SBATCH --output=logs/train%j.out
-#SBATCH --error=logs/train%j.err
+#SBATCH --output=logs/preprocess.out
+#SBATCH --error=logs/preprocess.err
 
 source ~/.bashrc
 conda activate h36m
@@ -17,10 +17,3 @@ python -u src/preprocess_resnet_features.py \
   --out /home/s26ldeso/Human3.6M_preprocessed_resnet_features \
   --batch-size 32
 
-python -u src/train.py \
-  --seq-len 40 \
-  --batch-size 16 \
-  --lr 1e-4 \
-  --epochs 50 \
-  --stride 5 \
-  --outdir runs/phase1
