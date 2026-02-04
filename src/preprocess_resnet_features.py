@@ -3,6 +3,7 @@ import os
 import argparse
 from pathlib import Path
 import time
+import concurrent.futures
 
 import torch
 import torch.nn as nn
@@ -28,11 +29,12 @@ def main():
     parser.add_argument("--seq-len", type=int, default=40)
     parser.add_argument("--frame-skip", type=int, default=2)
     parser.add_argument("--stride", type=int, default=5)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--num-workers", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=64, help="OPTIMIZED: Increased from 32 (16 per GPU on 4 GPUs)")
+    parser.add_argument("--num-workers", type=int, default=16, help="OPTIMIZED: Increased from 8 (4 per GPU on 4 GPUs)")
     parser.add_argument("--subjects", type=int, nargs="+", default=[1, 5, 6, 7, 8, 9, 11])
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--save-fp16", action="store_true", help="Store feats as float16 to save disk space")
+    parser.add_argument("--compile", action="store_true", help="OPTIMIZED: Use torch.compile for faster inference (PyTorch 2.0+)")
     args = parser.parse_args()
 
     # choose device
@@ -59,6 +61,7 @@ def main():
         max_clips=None,
     )
 
+    # OPTIMIZATION: Use persistent_workers to reuse worker processes and prefetch more batches
     loader = DataLoader(
         ds,
         batch_size=args.batch_size,
@@ -66,6 +69,8 @@ def main():
         num_workers=args.num_workers,
         pin_memory=device.startswith("cuda"),
         drop_last=False,
+        persistent_workers=True if args.num_workers > 0 else False,  # Reuse workers across batches
+        prefetch_factor=4 if args.num_workers > 0 else None,  # Prefetch 4 batches per worker
     )
 
     # ResNet50 like model.py => (B*T,2048,1,1) -> flatten
@@ -80,8 +85,18 @@ def main():
         print(f"Using DataParallel on {torch.cuda.device_count()} GPUs")
 
     backbone = backbone.to(device).eval()
+    
+    # OPTIMIZATION: Compile model for faster inference (PyTorch 2.0+)
+    if args.compile and hasattr(torch, 'compile'):
+        print("Compiling model with torch.compile for faster inference...")
+        backbone = torch.compile(backbone, mode='max-autotune')
+    
     if use_dp:
         backbone = nn.DataParallel(backbone)
+
+    # OPTIMIZATION: Async file saving to avoid blocking GPU
+    save_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+    save_futures = []
 
     # IMPORTANT: deterministic file naming per clip
     # DataLoader shuffles=False, so we can track global clip index.
@@ -103,9 +118,10 @@ def main():
         # -----------------------------
         # We flatten (B,T,3,224,224) -> (B*T,3,224,224) to run ResNet per frame.
         # DataParallel will split the (B*T) batch across GPUs.
+        # OPTIMIZATION: Use bfloat16 instead of float16 for better numerical stability
         with torch.autocast(
             device_type="cuda",
-            dtype=torch.float16,
+            dtype=torch.bfloat16 if device.startswith("cuda") and torch.cuda.is_bf16_supported() else torch.float16,
             enabled=device.startswith("cuda"),
         ):
             x = video.view(B * T, C, H, W)          # (B*T,3,224,224)
@@ -143,16 +159,31 @@ def main():
                     "frame_skip": args.frame_skip,
                 }
             }
-            torch.save(payload, save_path)
+            
+            # OPTIMIZATION: Save asynchronously to avoid blocking GPU
+            future = save_executor.submit(torch.save, payload, save_path)
+            save_futures.append(future)
+            
+            # Periodically clean up completed saves to avoid memory buildup
+            if len(save_futures) > 200:
+                save_futures = [f for f in save_futures if not f.done()]
 
         # light progress + timing
         if global_i % 500 == 0:
             dt = time.time() - t_last
             t_last = time.time()
-            print(f"Saved {global_i}/{len(ds)} clips... (+{dt:.1f}s since last report)")
+            clips_per_sec = 500 / dt if dt > 0 else 0
+            print(f"Saved {global_i}/{len(ds)} clips... (+{dt:.1f}s since last report, {clips_per_sec:.1f} clips/s)")
+
+    # OPTIMIZATION: Wait for all async saves to complete
+    print("Waiting for all file saves to complete...")
+    for future in save_futures:
+        future.result()
+    save_executor.shutdown(wait=True)
 
     print(f"Done. Saved {global_i} clips into: {out_root}")
-    print(f"Total preprocessing time: {time.time() - t_all:.2f} seconds")
+    total_time = time.time() - t_all
+    print(f"Total preprocessing time: {total_time:.2f} seconds ({global_i/total_time:.2f} clips/s)")
 
 
 if __name__ == "__main__":

@@ -182,6 +182,10 @@ class Human36MPreprocessedClips(Dataset):
         ])
 
         self.index: List[ClipIndex] = []
+        
+        # OPTIMIZATION: Cache all GT data and camera params during init to avoid repeated disk I/O
+        self._gt_cache = {}
+        self._cam_cache = {}
 
         for s in subjects:
             subj_dir = os.path.join(root, f"S{s}")
@@ -208,13 +212,19 @@ class Human36MPreprocessedClips(Dataset):
 
                     video_path = mp4s[0]
 
-                    joints3d_all, _ = _load_poses(gt_path)
+                    # OPTIMIZATION: Cache GT data once per video (not per clip)
+                    if gt_path not in self._gt_cache:
+                        self._gt_cache[gt_path] = _load_poses(gt_path)
+                    joints3d_all, _ = self._gt_cache[gt_path]
                     n_frames = int(joints3d_all.shape[0])
 
                     # start/end are in the SUBSAMPLED timeline (same as video after frame_skip)
                     n_frames_sub = (n_frames + self.frame_skip - 1) // self.frame_skip
 
-                    cam_params = _load_camera_params(cam_path)  # load camera parameters (rt,t,f,c,k) :contentReference[oaicite:4]{index=4}
+                    # OPTIMIZATION: Cache camera params once per video
+                    if cam_path not in self._cam_cache:
+                        self._cam_cache[cam_path] = _load_camera_params(cam_path)
+                    cam_params = self._cam_cache[cam_path]  # load camera parameters (rt,t,f,c,k)
 
                     for start in range(0, n_frames_sub - seq_len + 1, stride):
                         self.index.append(
@@ -246,8 +256,9 @@ class Human36MPreprocessedClips(Dataset):
 
     def _read_video_uint8_clip(self, video_path, start, end):
         # frames: (Tv,H,W,C) uint8
-        # NOTE: torchvision.io.read_video reads the full video; simple but slow.
-        # If you want faster later, we can switch to torchvision.io.VideoReader.
+        # OPTIMIZATION: Using read_video for simplicity - it's cached well by OS if videos are reused
+        # For maximum speed with random access, consider torchvision.io.VideoReader with seek
+        # However, read_video is simple and works well with DataLoader prefetching
         frames, _, _ = torchvision.io.read_video(video_path, pts_unit="sec")
 
         # start/end are in subsampled coords, so subsample first, then slice
@@ -269,8 +280,8 @@ class Human36MPreprocessedClips(Dataset):
         Tt, H, W, C = frames_uint8.shape
         assert C == 3
 
-        # load joints
-        joints3d_all, joints2d_all = _load_poses(ci.gt_path)  # (N,17,3), (N,17,2)
+        # OPTIMIZATION: Load joints from cache instead of disk
+        joints3d_all, joints2d_all = self._gt_cache[ci.gt_path]  # (N,17,3), (N,17,2)
 
         # map clip frame indices to original frame indices
         orig_idx = torch.arange(ci.start, ci.end, dtype=torch.long) * self.frame_skip
