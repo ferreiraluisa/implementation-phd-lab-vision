@@ -2,6 +2,7 @@
 import os
 import time
 import argparse
+from collections import defaultdict
 
 import torch
 import torch.nn as nn
@@ -18,7 +19,8 @@ from config import (
     JOINTS_NUM,
     FRAME_SKIP
 )
-from dataset import Human36MPreprocessedClips  
+# from dataset import Human36MPreprocessedClips
+from dataset_features import Human36MFeatureClips
 from model import PHDFor3DJoints as PHD
 
 
@@ -54,7 +56,9 @@ def save_checkpoint(path: str, model: nn.Module, optim: torch.optim.Optimizer,
 #      [0, fy, cy],
 #      [0,  0,  1]]
 # K * P_cam = [u, v, w]  =>  uv = [u/w, v/w](2d pixels)
-def project_with_K_torch(P_cam, K, eps):
+def project_with_K_torch(P_cam, K, eps=1e-6):
+    # P_cam: (...,3)
+    # K: (3,3) or (...,3,3) broadcastable to P_cam
     P_col = P_cam.unsqueeze(-1)                           # (...,3,1)
     P_h = torch.matmul(K, P_col).squeeze(-1)              # (...,3)
 
@@ -65,7 +69,7 @@ def project_with_K_torch(P_cam, K, eps):
 
 def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, log_every: int = 100):
     model.train()
-    t0 = time.time()
+    epoch_start = time.time()
 
     running_loss = 0.0
     running_l3d = 0.0
@@ -73,20 +77,40 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, log_ever
     running_mpjpe = 0.0
     n_batches = 0
 
-    for it, batch in enumerate(loader):
-        # NEW: dataset returns (video, joints3d, joints2d, K)
-        video, joints3d, joints2d, K = batch
+    # timers for each thing (data / forward / backward / total)
+    timers = defaultdict(float)
 
-        video = video.to(device)         # (B,T,3,H,W)
+    # this measures the time between iterations (i.e., DataLoader + host work)
+    end_data = time.time()
+
+    for it, batch in enumerate(loader):
+        t_iter_start = time.time()
+
+        # --------------------
+        # Data loading time
+        # --------------------
+        timers["data"] += (t_iter_start - end_data)
+
+        # NEW: dataset returns (feats, joints3d, joints2d, K)
+        feats, joints3d, joints2d, K = batch
+
+        feats = feats.to(device)         # (B,T,2048)
         joints3d = joints3d.to(device)   # (B,T,J,3)
         joints2d = joints2d.to(device)   # (B,T,J,2) pixel coords in the *same* cropped/resized image space as video
         K = K.to(device)                 # (3,3) or (B,3,3) or (B,T,3,3)
 
         optim.zero_grad(set_to_none=True)
 
+        # --------------------
+        # Forward + Loss time
+        # --------------------
+        t_fwd = time.time()
+
         with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=(device.startswith("cuda"))):
-            _phi, _phi_hat, joints_pred, _joints_hat = model(video, predict_future=False)
-            # joints_pred: (B,T,J,3)  assumed camera coordinates that match K
+            # IMPORTANT: I precomputed ResNet features, so we must NOT pass video into the model
+            # We use a dedicated path that assumes feats = ResNet output (2048D)
+            _phi, _phi_hat, joints_pred, _joints_hat = model.forward(feats, predict_future=False)
+            # joints_pred: (B,T,J,3) assumed camera coordinates that match K
 
             # 3D loss
             l3d = (joints_pred - joints3d).pow(2).mean()
@@ -97,6 +121,13 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, log_ever
 
             loss = l3d + (lambda_2d * l2d)
 
+        timers["forward+loss"] += (time.time() - t_fwd)
+
+        # --------------------
+        # Backward + Optim time
+        # --------------------
+        t_bwd = time.time()
+
         if scaler is not None:
             scaler.scale(loss).backward()
             scaler.step(optim)
@@ -105,21 +136,41 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, log_ever
             loss.backward()
             optim.step()
 
+        timers["backward"] += (time.time() - t_bwd)
+
+        # --------------------
+        # Logging / metrics
+        # --------------------
         running_loss += float(loss.item())
         running_l3d += float(l3d.item())
         running_l2d += float(l2d.item())
         running_mpjpe += mpjpe_mm(joints_pred.detach(), joints3d.detach())
         n_batches += 1
 
+        t_iter_end = time.time()
+        timers["iter"] += (t_iter_end - t_iter_start)
+        end_data = t_iter_end
+
         if log_every > 0 and (it + 1) % log_every == 0:
-            dt = time.time() - t0
+            dt_epoch = time.time() - epoch_start
             print(
                 f"  iter {it+1:05d}/{len(loader):05d} | "
                 f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f} + "
                 f"{lambda_2d:.3g}*2d {running_l2d/n_batches:.6f}) | "
                 f"mpjpe {running_mpjpe/n_batches:.3f} | "
-                f"time {dt:.1f}s"
+                f"time/iter {timers['iter']/n_batches:.4f}s | "
+                f"epoch {dt_epoch:.1f}s"
             )
+
+    # print time to each thing (per epoch)
+    epoch_time = time.time() - epoch_start
+    print("\n[Train timing]")
+    print(f"  data loading:    {timers['data']:.2f}s")
+    print(f"  forward+loss:    {timers['forward+loss']:.2f}s")
+    print(f"  backward+optim:  {timers['backward']:.2f}s")
+    print(f"  total iter time: {timers['iter']:.2f}s")
+    print(f"  total epoch:     {epoch_time:.2f}s")
+    print(f"  avg iter time:   {timers['iter']/max(n_batches,1):.4f}s\n")
 
     return running_loss / max(n_batches, 1), running_mpjpe / max(n_batches, 1)
 
@@ -134,18 +185,28 @@ def evaluate(model, loader, device, lambda_2d: float = 1.0):
     total_mpjpe = 0.0
     n_batches = 0
 
-    for batch in loader:
-        video, joints3d, joints2d, K = batch
+    # timing for evaluation
+    t_eval_start = time.time()
+    timers = defaultdict(float)
+    end_data = time.time()
 
-        video = video.to(device)
+    for batch in loader:
+        t_iter_start = time.time()
+        timers["data"] += (t_iter_start - end_data)
+
+        feats, joints3d, joints2d, K = batch
+
+        feats = feats.to(device)
         joints3d = joints3d.to(device)
         joints2d = joints2d.to(device)
         K = K.to(device)
 
-        _phi, _phi_hat, joints_pred, _joints_hat = model(video, predict_future=False)
+        t_fwd = time.time()
+        _phi, _phi_hat, joints_pred, _joints_hat = model.forward_from_features(feats, predict_future=False)
+        timers["forward"] += (time.time() - t_fwd)
 
         l3d = (joints_pred - joints3d).pow(2).mean()
-        proj2d = project_with_K_torch(joints_pred, K)
+        proj2d = project_with_K_torch(joints_pred, K, eps=1e-6)
         l2d = (proj2d - joints2d).pow(2).mean()
 
         loss = l3d + (lambda_2d * l2d)
@@ -155,6 +216,17 @@ def evaluate(model, loader, device, lambda_2d: float = 1.0):
         total_l2d += float(l2d.item())
         total_mpjpe += mpjpe_mm(joints_pred, joints3d)
         n_batches += 1
+
+        t_iter_end = time.time()
+        timers["iter"] += (t_iter_end - t_iter_start)
+        end_data = t_iter_end
+
+    eval_time = time.time() - t_eval_start
+    print("[Val timing]")
+    print(f"  data loading:  {timers['data']:.2f}s")
+    print(f"  forward:       {timers['forward']:.2f}s")
+    print(f"  total:         {eval_time:.2f}s")
+    print(f"  avg iter time: {timers['iter']/max(n_batches,1):.4f}s\n")
 
     # (optionally you can also print l3d/l2d outside)
     return (
@@ -187,7 +259,7 @@ def main():
     os.makedirs(args.outdir, exist_ok=True)
 
     # load data
-    train_set = Human36MPreprocessedClips(
+    train_set = Human36MFeatureClips(
         root=args.root,
         subjects=[1, 6, 7, 8],
         seq_len=args.seq_len,
@@ -195,7 +267,7 @@ def main():
         stride=args.stride,
         max_clips=args.max_train_clips,
     )
-    val_set = Human36MPreprocessedClips(
+    val_set = Human36MFeatureClips(
         root=args.root,
         subjects=[5],
         seq_len=args.seq_len,
@@ -256,6 +328,7 @@ def main():
 
     for epoch in range(start_epoch, args.epochs):
         print(f"\nEpoch {epoch+1}/{args.epochs}")
+        t_epoch = time.time()
 
         tr_loss, tr_mpjpe = train(
             model, train_loader, optim, scaler, device,
@@ -269,6 +342,7 @@ def main():
 
         print(f"Train: loss={tr_loss:.6f} | mpjpe={tr_mpjpe:.3f}")
         print(f"Val:   loss={va_loss:.6f} (3d {va_l3d:.6f} + {args.lambda_2d:.3g}*2d {va_l2d:.6f}) | mpjpe={va_mpjpe:.3f}")
+        print(f"Epoch time: {time.time() - t_epoch:.2f}s")
 
         save_checkpoint(
             os.path.join(args.outdir, "last.pt"),

@@ -4,7 +4,7 @@ import torch
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # data params
-H36M_ROOT = "../Human3.6M_preprocessed"  # Path to Human3.6M dataset
+H36M_ROOT = "/home/s26ldeso/Human3.6M_preprocessed_resnet_features"  # Path to Human3.6M dataset
 FRAME_SKIP = 2           # Frame subsampling rate during video loading
 SEQ_LEN = 40               # total frames per sequence
 INPUT_LEN = 15             # Frames used to warm up the history

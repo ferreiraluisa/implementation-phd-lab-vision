@@ -128,8 +128,9 @@ class PHDFor3DJoints(nn.Module):
         # PER-FRAME FEATURE EXTRACTOR
         # ----------------------------------------------------
         # pretrained ResNet-50 + average pooling of last layer as 2048D feature extractor
-        resnet = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
-        self.backbone = nn.Sequential(*list(resnet.children())[:-1])
+        # resnet = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
+        # self.backbone = nn.Sequential(*list(resnet.children())[:-1])
+        # commented out bc we don't want to extract features here, only in preprocess_resnet_features.py
 
         if freeze_backbone:
             for p in self.backbone.parameters():
@@ -141,17 +142,19 @@ class PHDFor3DJoints(nn.Module):
         self.f_AR = CausalTemporalNet(latent_dim)
         self.f_3D = JointRegressor(latent_dim, joints_num)
 
-    @torch.no_grad() # resnet must not be trained
-    def extract_features(self, video):
-        # video: (B, T, C, H, W) batch_size, frames, channels, height, width
-        B, T, C, H, W = video.shape
-        x = video.view(B * T, C, H, W)
-        feats = self.backbone(x)          
-        feats = feats.flatten(1)         
-        return feats.view(B, T, -1)
+    # @torch.no_grad() # resnet must not be trained
+    # def extract_features(self, video):
+    #     # video: (B, T, C, H, W) batch_size, frames, channels, height, width
+    #     B, T, C, H, W = video.shape
+    #     x = video.view(B * T, C, H, W)
+    #     feats = self.backbone(x)          
+    #     feats = feats.flatten(1)         
+    #     return feats.view(B, T, -1)
 
-    def forward(self, video, predict_future=False):
-        feats = self.extract_features(video)
+    # def forward(self, video, predict_future=False):
+    def forward(self, feats, predict_future=False):
+        # feats = self.extract_features(video) # preprocessed features input in preprocess_resnet_features.py
+        # feats: (B, T, 2048)
         phi = self.f_movie(feats)
 
         ar_out = self.f_AR(phi)
