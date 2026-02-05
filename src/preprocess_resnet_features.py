@@ -48,6 +48,7 @@ def main():
 
     out_root = Path(args.out)
     out_root.mkdir(parents=True, exist_ok=True)
+    print(f"number gpus:{torch.cuda.device_count()}, device: {device}")
 
     # dataset yields: video, joints3d, joints2d, K
     ds = Human36MPreprocessedClips(
