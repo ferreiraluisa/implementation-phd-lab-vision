@@ -9,7 +9,7 @@ and saving it to a .npz file for debugging purposes.
 Coded by Luisa Ferreira, 2026.
 """
 
-root = "../../Human3.6M_preprocessed"
+root = "../Human3.6M_preprocessed"
 
 train_ds = Human36MPreprocessedClips(
     root,
