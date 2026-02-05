@@ -3,6 +3,7 @@ import glob
 import pickle
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -10,6 +11,7 @@ from torch.utils.data import Dataset
 import torchvision
 from torchvision.transforms import v2 as T
 import torchvision.transforms.functional as F
+from torchvision.io import VideoReader
 
 """
 This module defines a PyTorch Dataset for loading fixed-length clips from the Human3.6M dataset.
@@ -22,7 +24,6 @@ K: (3,3) camera intrinsics adjusted for the cropped/resized frames
 
 Coded by Luisa Ferreira, 2026.
 """
-# store clip data, for each video of Human3.6M, create clips of fixed length
 @dataclass
 class ClipIndex:
     video_path: str
@@ -33,7 +34,7 @@ class ClipIndex:
     cam_params: dict
     start: int
     end: int  # exclusive
-
+    video_idx: int = 0  # group clips by video
 
 
 def _load_poses(gt_path): 
@@ -47,14 +48,11 @@ def _load_poses(gt_path):
 def _load_camera_params(cam_path):
     with open(cam_path, "rb") as f:
         data = pickle.load(f)
-    # expected from read_human_36m.py:
-    # {'f': flen, 'c': c, 'k': k, 'rt': rot, 't': t}
-    return data  # dictionary with camera parameters
+    return data
 
 
 def _compute_square_crop_from_2d(joints2d, img_h, img_w, scale=1.6):
-    # choose best crop to center on the subject based on the 2D joints across all frames of the sequence
-    pts = joints2d.reshape(-1, 2)  # (T*J,2)
+    pts = joints2d.reshape(-1, 2)
 
     x_min = pts[:, 0].min()
     x_max = pts[:, 0].max()
@@ -67,14 +65,11 @@ def _compute_square_crop_from_2d(joints2d, img_h, img_w, scale=1.6):
     w = (x_max - x_min).clamp(min=1.0)
     h = (y_max - y_min).clamp(min=1.0)
 
-    side = scale * torch.max(w, h) # make square crop, resnet uses 224x224(square)
-    # scale to add extra padding around the subject bbox so it fits and it's not tighted.
+    side = scale * torch.max(w, h)
 
-    #center - half side
     left = cx - 0.5 * side
     top = cy - 0.5 * side
 
-    # keep crop inside image
     max_left = torch.tensor(float(img_w), device=left.device) - side
     max_top  = torch.tensor(float(img_h), device=top.device) - side
     left = left.clamp(0.0, max_left.item())
@@ -84,7 +79,6 @@ def _compute_square_crop_from_2d(joints2d, img_h, img_w, scale=1.6):
     top_i = int(torch.round(top).item())
     side_i = int(torch.round(side).item())
 
-    # final safety clamp in integer space
     side_i = max(1, min(side_i, img_w - left_i, img_h - top_i))
     return torch.tensor([top_i, left_i, side_i, side_i], dtype=torch.int64)
 
@@ -100,10 +94,7 @@ def _adjust_joints2d_after_crop_and_resize(joints2d, box, out_size=224):
     return joints2d_cropped
 
 
-def _adjust_camera_after_crop_and_resize(cam_params,box,out_size=224):
-    # update camera intrinsics after crop+resize
-    # c' = (c - [left, top]) * scale
-    # f' = f * scale
+def _adjust_camera_after_crop_and_resize(cam_params, box, out_size=224):
     top, left, hh, ww = box.tolist()
     sx = out_size / float(ww)
     sy = out_size / float(hh)
@@ -113,11 +104,9 @@ def _adjust_camera_after_crop_and_resize(cam_params,box,out_size=224):
     f = np.asarray(new_cam["f"], dtype=np.float32).reshape(2)
     c = np.asarray(new_cam["c"], dtype=np.float32).reshape(2)
 
-    # subtract crop offset, then scale into resized image coordinates
     c_new = np.array([(c[0] - float(left)) * sx, (c[1] - float(top)) * sy], dtype=np.float32)
     f_new = np.array([f[0] * sx, f[1] * sy], dtype=np.float32)
 
-    # option 1: return only K to calculate reprojection without radial distortions
     K = np.array(
         [[f_new[0], 0.0,     c_new[0]],
          [0.0,     f_new[1], c_new[1]],
@@ -125,11 +114,6 @@ def _adjust_camera_after_crop_and_resize(cam_params,box,out_size=224):
         dtype=np.float32
     )
     K = torch.from_numpy(K)
-    #option 2: return full camera params with updated f,c to use radial distortion if needed
-    # new_cam["f"] = f_new
-    # new_cam["c"] = c_new
-
-    # return new_cam
     return K
 
 
@@ -138,21 +122,15 @@ def _crop_and_resize_video_uint8(frames_uint8, box, out_size=224):
 
     # (T,C,H,W)
     frames = frames_uint8.permute(0, 3, 1, 2)
-    frames = frames[:, :, top:top + hh, left:left + ww]  # (T,C,hh,ww)
+    frames = frames[:, :, top:top + hh, left:left + ww]
 
-    frames = F.resize(frames, [out_size, out_size])
+    frames = F.resize(frames, [out_size, out_size], antialias=False)
 
     # uint8 -> float [0,1]
     frames = frames.to(torch.float32) / 255.0
     return frames
 
 
-# -----------------------------
-# pytorch dataset that returns fixed-length clips from Human3.6M preprocessed
-# video:  (T,3,224,224) normalized for ImageNet/ResNet50
-# joints: (T,17,3)
-# T: number of frames in the clip
-# -----------------------------
 class Human36MPreprocessedClips(Dataset):
     def __init__(
         self,
@@ -162,8 +140,8 @@ class Human36MPreprocessedClips(Dataset):
         stride: int = 10,
         frame_skip: int = 2,
         cams: Optional[List[int]] = None,
-        resize: int = 224,        # ImageNet size
-        crop_scale: float = 1.6,  # margin around subject bbox from 2D joints
+        resize: int = 224,
+        crop_scale: float = 1.6,
         max_clips: Optional[int] = None,
     ):
         super().__init__()
@@ -174,18 +152,20 @@ class Human36MPreprocessedClips(Dataset):
         self.frame_skip = frame_skip
         self.resize = resize
         self.crop_scale = crop_scale
+        self.use_video_reader = use_video_reader
 
-        # normalization for ImageNet/ResNet
         self.frame_tf = T.Compose([
             T.Normalize(mean=(0.485, 0.456, 0.406),
                         std=(0.229, 0.224, 0.225)),
         ])
 
         self.index: List[ClipIndex] = []
-        
-        # OPTIMIZATION: Cache all GT data and camera params during init to avoid repeated disk I/O
         self._gt_cache = {}
         self._cam_cache = {}
+        
+        # NEW: Track which clips belong to which video for potential batching
+        self._video_to_clips = defaultdict(list)
+        video_counter = 0
 
         for s in subjects:
             subj_dir = os.path.join(root, f"S{s}")
@@ -212,35 +192,37 @@ class Human36MPreprocessedClips(Dataset):
 
                     video_path = mp4s[0]
 
-                    # OPTIMIZATION: Cache GT data once per video (not per clip)
                     if gt_path not in self._gt_cache:
                         self._gt_cache[gt_path] = _load_poses(gt_path)
                     joints3d_all, _ = self._gt_cache[gt_path]
                     n_frames = int(joints3d_all.shape[0])
 
-                    # start/end are in the SUBSAMPLED timeline (same as video after frame_skip)
                     n_frames_sub = (n_frames + self.frame_skip - 1) // self.frame_skip
 
-                    # OPTIMIZATION: Cache camera params once per video
                     if cam_path not in self._cam_cache:
                         self._cam_cache[cam_path] = _load_camera_params(cam_path)
-                    cam_params = self._cam_cache[cam_path]  # load camera parameters (rt,t,f,c,k)
+                    cam_params = self._cam_cache[cam_path]
 
                     for start in range(0, n_frames_sub - seq_len + 1, stride):
-                        self.index.append(
-                            ClipIndex(
-                                video_path=video_path,
-                                gt_path=gt_path,
-                                subject=s,
-                                action=action,
-                                cam=cam_name,
-                                cam_params=cam_params,
-                                start=start,
-                                end=start + seq_len,
-                            )
+                        clip_idx = ClipIndex(
+                            video_path=video_path,
+                            gt_path=gt_path,
+                            subject=s,
+                            action=action,
+                            cam=cam_name,
+                            cam_params=cam_params,
+                            start=start,
+                            end=start + seq_len,
+                            video_idx=video_counter,
                         )
+                        self.index.append(clip_idx)
+                        self._video_to_clips[video_path].append(len(self.index) - 1)
+                        
                         if max_clips is not None and len(self.index) >= max_clips:
                             break
+                    
+                    video_counter += 1
+                    
                     if max_clips is not None and len(self.index) >= max_clips:
                         break
                 if max_clips is not None and len(self.index) >= max_clips:
@@ -254,36 +236,66 @@ class Human36MPreprocessedClips(Dataset):
     def __len__(self) -> int:
         return len(self.index)
 
-    def _read_video_uint8_clip(self, video_path, start, end):
-        # frames: (Tv,H,W,C) uint8
-        # OPTIMIZATION: Using read_video for simplicity - it's cached well by OS if videos are reused
-        # For maximum speed with random access, consider torchvision.io.VideoReader with seek
-        # However, read_video is simple and works well with DataLoader prefetching
-        frames, _, _ = torchvision.io.read_video(video_path, pts_unit="sec")
+    def _read_video_uint8_clip_fast(self, video_path, start, end):
+        try:
+            reader = VideoReader(video_path, "video")
+            metadata = reader.get_metadata()
+            fps = metadata['video']['fps'][0]
+            
+            # Calculate time position
+            start_time = (start * self.frame_skip) / fps
+            
+            # Seek to approximate position
+            reader.seek(start_time)
+            
+            frames = []
+            target_frames = end - start
+            frame_idx = 0
+            
+            # Read frames with skip
+            for frame in reader:
+                if frame_idx % self.frame_skip == 0:
+                    frames.append(frame['data'])
+                    if len(frames) >= target_frames:
+                        break
+                frame_idx += 1
+                
+                # Safety: don't read too far
+                if frame_idx > target_frames * self.frame_skip * 2:
+                    break
+            
+            if len(frames) < target_frames:
+                # Fallback to old method if VideoReader fails
+                return self._read_video_uint8_clip_legacy(video_path, start, end)
+            
+            return torch.stack(frames[:target_frames])
+            
+        except Exception as e:
+            # Fallback to legacy method
+            print("VideoReader failed for {}, falling back to legacy method. Error: {}".format(video_path, e))
+            return self._read_video_uint8_clip(video_path, start, end)
 
-        # start/end are in subsampled coords, so subsample first, then slice
+    def _read_video_uint8_clip(self, video_path, start, end):
+        frames, _, _ = torchvision.io.read_video(video_path, pts_unit="sec")
         frames = frames[::self.frame_skip]
         frames = frames[start:end]
-
+        
         if frames.shape[0] != (end - start):
             raise RuntimeError(
                 f"Frame count mismatch reading {video_path}: "
                 f"got {frames.shape[0]}, expected {end-start} for slice [{start}:{end}]."
             )
-        return frames  # (T,H,W,C) uint8
+        return frames
 
     def __getitem__(self, idx):
         ci = self.index[idx]
 
-        # read frames (uint8)
-        frames_uint8 = self._read_video_uint8_clip(ci.video_path, ci.start, ci.end)  # (T,H,W,C)
+        frames_uint8 = self._read_video_uint8_clip_fast(ci.video_path, ci.start, ci.end)
+        
         Tt, H, W, C = frames_uint8.shape
         assert C == 3
 
-        # OPTIMIZATION: Load joints from cache instead of disk
-        joints3d_all, joints2d_all = self._gt_cache[ci.gt_path]  # (N,17,3), (N,17,2)
-
-        # map clip frame indices to original frame indices
+        joints3d_all, joints2d_all = self._gt_cache[ci.gt_path]
         orig_idx = torch.arange(ci.start, ci.end, dtype=torch.long) * self.frame_skip
 
         if int(orig_idx[-1]) >= joints3d_all.shape[0]:
@@ -292,8 +304,9 @@ class Human36MPreprocessedClips(Dataset):
                 f"max orig_idx={int(orig_idx[-1])}, n_frames={joints3d_all.shape[0]}"
             )
 
-        joints3d = joints3d_all[orig_idx]  # (T,17,3)
-        joints2d = joints2d_all[orig_idx]  # (T,17,2)
+        joints3d = joints3d_all[orig_idx]
+        joints2d = joints2d_all[orig_idx]
+        
         assert frames_uint8.shape[0] == joints3d.shape[0], (
             f"Mismatch T: video {frames_uint8.shape[0]} vs joints {joints3d.shape[0]}"
         )
@@ -307,13 +320,8 @@ class Human36MPreprocessedClips(Dataset):
 
         video = _crop_and_resize_video_uint8(frames_uint8, box, out_size=self.resize)
         joints2d = _adjust_joints2d_after_crop_and_resize(joints2d=joints2d, box=box, out_size=self.resize)
-
-        # IMPORTANT:
-        # 3D joints do NOT change with crop/resize (they are in 3D space, not image pixel space).
-        # Only the camera intrinsics must be updated so that projecting 3D -> 2D matches the cropped/resized image.
         K = _adjust_camera_after_crop_and_resize(ci.cam_params, box=box, out_size=self.resize)
 
-        # normalize frames for ImageNet/ResNet
         video = self.frame_tf(video)
 
         return video, joints3d, joints2d, K
