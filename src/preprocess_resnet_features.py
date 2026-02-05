@@ -100,7 +100,6 @@ def main():
         frame_skip=args.frame_skip,
         stride=args.stride,
         max_clips=None,
-        use_video_reader=True,  # Use faster VideoReader
     )
 
     # Optimized DataLoader
@@ -182,7 +181,7 @@ def main():
             clip = ds.index[global_i]
             global_i += 1
 
-            rel_dir = Path(f"S{clip.subject}") / clip.action / f"cam_{clip.cam}"
+            rel_dir = Path(f"S{clip.subject}") / clip.action / f"{clip.cam}"
             save_dir = out_root / rel_dir
             save_dir.mkdir(parents=True, exist_ok=True)
 
