@@ -254,7 +254,9 @@ class Human36MPreprocessedClips(Dataset):
             # Read frames with skip
             for frame in reader:
                 if frame_idx % self.frame_skip == 0:
-                    frames.append(frame['data'])
+                    frame_data = frame['data']        # (C,H,W)
+                    frame_data = frame_data.permute(1, 2, 0)  # (H,W,C) ← FIXED!
+                    frames.append(frame_data)    
                     if len(frames) >= target_frames:
                         break
                 frame_idx += 1
