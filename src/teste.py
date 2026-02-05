@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from dataset import Human36MPreprocessedClips
-from dataset_features import Human36MPreprocessedResNetFeaturesClips
+from dataset_features import Human36MFeatureClips
 
 """
 This script tests the Human36MPreprocessedClips dataset by loading a batch of data
@@ -13,7 +13,7 @@ Coded by Luisa Ferreira, 2026.
 root = "../Human3.6M_preprocessed_resnet_features"
 
 # train_ds = Human36MPreprocessedClips(
-train_ds = Human36MPreprocessedResNetFeaturesClips(
+train_ds = Human36MFeatureClips(
     root,
     subjects=[1],
 #     seq_len=40,
