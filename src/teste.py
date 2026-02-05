@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from dataset import Human36MPreprocessedClips
+from dataset_features import Human36MPreprocessedResNetFeaturesClips
 
 """
 This script tests the Human36MPreprocessedClips dataset by loading a batch of data
@@ -9,15 +10,17 @@ and saving it to a .npz file for debugging purposes.
 Coded by Luisa Ferreira, 2026.
 """
 
-root = "../Human3.6M_preprocessed"
+root = "../Human3.6M_preprocessed_resnet_features"
 
-train_ds = Human36MPreprocessedClips(
+# train_ds = Human36MPreprocessedClips(
+train_ds = Human36MPreprocessedResNetFeaturesClips(
     root,
     subjects=[1],
-    seq_len=40,
-    stride=10,
-    frame_skip=2
+#     seq_len=40,
+#     stride=10,
+#     frame_skip=2
 )
+
 
 train_dl = DataLoader(
     train_ds,
