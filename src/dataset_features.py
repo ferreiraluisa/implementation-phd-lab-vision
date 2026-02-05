@@ -16,6 +16,7 @@ class Human36MFeatureClips(Dataset):
 
         pattern = os.path.join(feat_root, "S*", "*", "cam_*", "clip_*.pt")
         files = sorted(glob.glob(pattern))
+        
 
         if subjects is not None:
             keep = []

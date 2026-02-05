@@ -7,7 +7,7 @@ This script visualizes a batch of data previously saved in 'debug_batch.npz'.
 Coded by Luisa Ferreira, 2026.
 """
 
-data = np.load("debug_batch.npz", allow_pickle=True)
+data = np.load("src/debug_batch.npz", allow_pickle=True)
 
 print(data.files)
 
