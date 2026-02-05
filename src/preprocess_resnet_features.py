@@ -48,7 +48,7 @@ def main():
 
     out_root = Path(args.out)
     out_root.mkdir(parents=True, exist_ok=True)
-
+    print(f"number gpus:{torch.cuda.device_count()}, device: {device}")
     # dataset yields: video, joints3d, joints2d, K
     ds = Human36MPreprocessedClips(
         root=args.root,
@@ -122,7 +122,7 @@ def main():
 
             # Create a stable folder structure
             # out/S1/ActionName/cam_0/clip_start_end_fs2_len40.pt
-            rel_dir = Path(f"S{clip.subject}") / clip.action / f"cam_{clip.cam}"
+            rel_dir = Path(f"S{clip.subject}") / clip.action / f"{clip.cam}"
             save_dir = out_root / rel_dir
             save_dir.mkdir(parents=True, exist_ok=True)
 
