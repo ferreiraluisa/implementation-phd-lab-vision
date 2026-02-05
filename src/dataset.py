@@ -152,7 +152,6 @@ class Human36MPreprocessedClips(Dataset):
         self.frame_skip = frame_skip
         self.resize = resize
         self.crop_scale = crop_scale
-        self.use_video_reader = use_video_reader
 
         self.frame_tf = T.Compose([
             T.Normalize(mean=(0.485, 0.456, 0.406),
