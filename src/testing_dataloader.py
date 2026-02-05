@@ -1,6 +1,7 @@
 import numpy as np
 from visualize import plot_batch_sample
 from visualize_2d import plot_batch_sample_2d_2dproj_3d
+from visualize_features import plot_batch_sample_2d_2dproj_3d_no_video
 
 """
 This script visualizes a batch of data previously saved in 'debug_batch.npz'.
@@ -32,7 +33,7 @@ K = data["cam_K"]        # (B,3,3)
 # print("t:", t.shape, t.dtype)
 # print("K", K.shape, K.dtype)
 
-plot_batch_sample_2d_2dproj_3d(video, joints3d, joints2d, K, sample_idx=0, fps=10)
+plot_batch_sample_2d_2dproj_3d(video, joints3d, joints2d, K, sample_idx=1, fps=10)
 # plot_batch_sample(video, joints, sample_idx=0, fps=25)
 # for i in range(video.shape[0]):
 #     plot_batch_sample(video, joints, sample_idx=i, fps=25)

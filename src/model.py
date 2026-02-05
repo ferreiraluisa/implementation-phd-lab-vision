@@ -155,13 +155,13 @@ class PHDFor3DJoints(nn.Module):
     def forward(self, feats, predict_future=False):
         # feats = self.extract_features(video) # preprocessed features input in preprocess_resnet_features.py
         # feats: (B, T, 2048)
-        phi = self.f_movie(feats)
+        phi = self.f_movie(feats) # temporal causal encoder f_movie
 
-        ar_out = self.f_AR(phi)
+        ar_out = self.f_AR(phi) # autoregressive predictor f_AR
         phi_hat = torch.zeros_like(ar_out)
         phi_hat[:, 1:, :] = ar_out[:, :-1, :]
 
-        joints_phi = self.f_3D(phi)
+        joints_phi = self.f_3D(phi) # 3D regressor f_3D 
 
         joints_hat = None
         if predict_future:

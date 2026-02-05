@@ -5,8 +5,7 @@ from typing import List, Optional, Tuple
 import torch
 from torch.utils.data import Dataset
 
-""" This module provides a Dataset class to load precomputed ResNet50 features for Human3.6M video clips.
-The features are expected to be stored in a structured directory format, with each clip's data saved
+""" This module provides a Dataset class to load precomputed ResNet50 features for Human3.6M video clips. The preprocess was made with preprocess_resnet_features.py.
 
 Coded by Luísa Ferreira, 2026
 """

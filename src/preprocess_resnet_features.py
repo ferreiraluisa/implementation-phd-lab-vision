@@ -1,4 +1,3 @@
-# precompute_resnet_features.py
 import os
 import argparse
 from pathlib import Path
@@ -21,12 +20,13 @@ This allows for efficient loading during model training or evaluation. Avoiding 
 Coded by Luísa Ferreira, 2026
 
 Used Claude to help optimize and refactor the code for better performance and readability.
-(older version was taking too long(5 hours to process only 6000/200000 clips), this version processes all ~20k clips in ~30 minutes on a single GPU).
+(older version was taking too long(5 hours to process only 6k/200k clips), this version processes all ~20k clips in ~30 minutes on a single GPU).
 """
 
 
 class AsyncFileWriter:
-    """Write files asynchronously in background thread to not block GPU"""
+    # asynchronous file writer using a background thread and a queue, to speed up saving features to disk without blocking the main processing loop
+    # this helped a lot!!!!!!!!
     def __init__(self, max_queue_size=100):
         self.queue = Queue(maxsize=max_queue_size)
         self.thread = Thread(target=self._worker, daemon=True)
@@ -36,7 +36,7 @@ class AsyncFileWriter:
     def _worker(self):
         while True:
             item = self.queue.get()
-            if item is None:  # Poison pill to stop
+            if item is None:  
                 break
             payload, save_path = item
             torch.save(payload, save_path, _use_new_zipfile_serialization=False)
@@ -67,19 +67,15 @@ def main():
     parser.add_argument("--subjects", type=int, nargs="+", default=[1, 5, 6, 7, 8, 9, 11])
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--save-fp16", action="store_true", help="Store feats as float16")
-    parser.add_argument("--compile", action="store_true", help="Use torch.compile (PyTorch 2.0+, 2-3x faster)")
-    parser.add_argument("--prefetch-factor", type=int, default=4, help="Prefetch batches per worker")
-    parser.add_argument("--async-save", action="store_true", help="Save files asynchronously (faster)")
     args = parser.parse_args()
 
-    # Device setup
     if args.device.startswith("cuda") and not torch.cuda.is_available():
         print("WARNING: CUDA requested but not available. Falling back to CPU.")
         device = "cpu"
     else:
         device = args.device
 
-    # Performance optimizations
+    # to help performance, enable cudnn benchmark and allow TF32 on Ampere+ GPUs, which can speed up ResNet inference significantly with minimal impact on feature quality. Also set pin_memory=True in DataLoader for faster host to GPU transfers.
     if device.startswith("cuda"):
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -92,7 +88,6 @@ def main():
         print(f"GPUs available: {torch.cuda.device_count()}")
         print(f"GPU: {torch.cuda.get_device_name(0)}")
 
-    # Dataset with optimizations
     ds = Human36MPreprocessedClips(
         root=args.root,
         subjects=args.subjects,
@@ -102,7 +97,6 @@ def main():
         max_clips=None,
     )
 
-    # Optimized DataLoader
     loader = DataLoader(
         ds,
         batch_size=args.batch_size,
@@ -110,8 +104,8 @@ def main():
         num_workers=args.num_workers,
         pin_memory=device.startswith("cuda"),
         drop_last=False,
-        prefetch_factor=args.prefetch_factor,  # Prefetch more batches
-        persistent_workers=True,  # Keep workers alive - faster!
+        prefetch_factor=4,  
+        persistent_workers=True,  # keep workers alive for the entire epoch, faster than respawning each time
     )
 
     # ResNet50 backbone
@@ -119,40 +113,38 @@ def main():
     backbone = nn.Sequential(*list(resnet.children())[:-1])
     backbone = backbone.to(device).eval()
 
-    # Multi-GPU setup
+    # -------------------------
+    # multi-gpu with nn.DataParallel
+    # -------------------------
     use_dp = device.startswith("cuda") and (torch.cuda.device_count() > 1)
     if use_dp:
         print(f"Using DataParallel on {torch.cuda.device_count()} GPUs")
         backbone = nn.DataParallel(backbone)
 
     # Compile for massive speedup (PyTorch 2.0+)
-    if args.compile:
-        print("Compiling model with torch.compile (this may take a minute)...")
-        try:
-            backbone = torch.compile(backbone, mode="max-autotune")
-            print("✓ Model compiled successfully - expect 2-3x speedup!")
-        except Exception as e:
-            print(f"Warning: torch.compile failed ({e}), continuing without compilation")
+    try:
+        backbone = torch.compile(backbone, mode="max-autotune")
+        print("✓ Model compiled successfully - expect 2-3x speedup!")
+    except Exception as e:
+        print(f"Warning: torch.compile failed ({e}), continuing without compilation")
 
-    # Async file writer
-    writer = AsyncFileWriter() if args.async_save else None
+    # async writer
+    writer = AsyncFileWriter() 
 
     global_i = 0
     t_all = time.time()
     t_last = time.time()
     
-    # Warmup run for torch.compile
-    if args.compile:
-        print("Warming up compiled model...")
-        warmup_batch = next(iter(loader))
-        warmup_video = warmup_batch[0].to(device, non_blocking=True)
-        B, T, C, H, W = warmup_video.shape
-        with torch.autocast(device_type="cuda" if device.startswith("cuda") else "cpu", 
-                           dtype=torch.bfloat16 if device.startswith("cuda") else torch.float32):
-            _ = backbone(warmup_video.view(B * T, C, H, W).contiguous())
-        if device.startswith("cuda"):
-            torch.cuda.synchronize()
-        print("✓ Warmup complete")
+    print("Warming up compiled model...")
+    warmup_batch = next(iter(loader))
+    warmup_video = warmup_batch[0].to(device, non_blocking=True)
+    B, T, C, H, W = warmup_video.shape
+    with torch.autocast(device_type="cuda" if device.startswith("cuda") else "cpu", 
+                        dtype=torch.bfloat16 if device.startswith("cuda") else torch.float32):
+        _ = backbone(warmup_video.view(B * T, C, H, W).contiguous())
+    if device.startswith("cuda"):
+        torch.cuda.synchronize()
+    print("✓ Warmup complete")
 
     print(f"\nProcessing {len(ds)} clips...")
     print("-" * 60)
@@ -163,7 +155,7 @@ def main():
 
         video = video.to(device, non_blocking=True)
 
-        # Forward pass with autocast (bfloat16 for better stability)
+        # forward pass with torch.autocast for mixed precision
         with torch.autocast(
             device_type="cuda" if device.startswith("cuda") else "cpu",
             dtype=torch.bfloat16 if device.startswith("cuda") else torch.float32,
@@ -173,10 +165,8 @@ def main():
             feats = backbone(x).flatten(1)
             feats = feats.view(B, T, -1)
 
-        # Convert to save dtype
         feats_to_save = feats.half() if args.save_fp16 else feats.float()
 
-        # Save clips
         for b in range(B):
             clip = ds.index[global_i]
             global_i += 1

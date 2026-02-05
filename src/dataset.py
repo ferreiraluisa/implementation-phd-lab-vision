@@ -237,21 +237,21 @@ class Human36MPreprocessedClips(Dataset):
 
     def _read_video_uint8_clip_fast(self, video_path, start, end):
         try:
+            # nn.VideoReader is much faster than torchvision.io.read_video, but can be less robust on some files.
             reader = VideoReader(video_path, "video")
             metadata = reader.get_metadata()
             fps = metadata['video']['fps'][0]
             
-            # Calculate time position
+            # calculate the timestamp to seek to, based on the start frame and frame_skip
             start_time = (start * self.frame_skip) / fps
             
-            # Seek to approximate position
             reader.seek(start_time)
             
             frames = []
             target_frames = end - start
             frame_idx = 0
             
-            # Read frames with skip
+            # read frames with skip
             for frame in reader:
                 if frame_idx % self.frame_skip == 0:
                     frame_data = frame['data']        # (C,H,W)
@@ -266,17 +266,18 @@ class Human36MPreprocessedClips(Dataset):
                     break
             
             if len(frames) < target_frames:
-                # Fallback to old method if VideoReader fails
-                return self._read_video_uint8_clip_legacy(video_path, start, end)
+                # fallback to old method if we couldn't read enough frames
+                return self._read_video_uint8_clip(video_path, start, end)
             
             return torch.stack(frames[:target_frames])
             
         except Exception as e:
-            # Fallback to legacy method
+            # fallback to old method torchvision.io.read_video which is more robust but slower
             print("VideoReader failed for {}, falling back to legacy method. Error: {}".format(video_path, e))
             return self._read_video_uint8_clip(video_path, start, end)
 
     def _read_video_uint8_clip(self, video_path, start, end):
+        # read video using torchvision, which is more robust but much slower than nn.VideoReader
         frames, _, _ = torchvision.io.read_video(video_path, pts_unit="sec")
         frames = frames[::self.frame_skip]
         frames = frames[start:end]
@@ -311,7 +312,8 @@ class Human36MPreprocessedClips(Dataset):
         assert frames_uint8.shape[0] == joints3d.shape[0], (
             f"Mismatch T: video {frames_uint8.shape[0]} vs joints {joints3d.shape[0]}"
         )
-
+    
+        # compute box that tightly crops the person in the clip, so the image can be centered on the subject 
         box = _compute_square_crop_from_2d(
             joints2d=joints2d,
             img_h=H,
@@ -319,10 +321,17 @@ class Human36MPreprocessedClips(Dataset):
             scale=self.crop_scale,
         )
 
+        # compute crop on video frames, adjust joints2d and camera intrinsics accordingly
         video = _crop_and_resize_video_uint8(frames_uint8, box, out_size=self.resize)
         joints2d = _adjust_joints2d_after_crop_and_resize(joints2d=joints2d, box=box, out_size=self.resize)
         K = _adjust_camera_after_crop_and_resize(ci.cam_params, box=box, out_size=self.resize)
 
+        # normalize video for ResNet
         video = self.frame_tf(video)
 
+        # __getitem__ returns:  
+        # video (T,3,224,224), => T is number of frame in clip and 224 is the resized frame size, normalized for ResNet
+        # joints3d (T,17,3), 
+        # joints2d (T,17,2), 
+        # K (3,3)
         return video, joints3d, joints2d, K

@@ -1,4 +1,3 @@
-# train.py
 import os
 import time
 import argparse
@@ -19,10 +18,8 @@ from config import (
     JOINTS_NUM,
     FRAME_SKIP
 )
-# from dataset import Human36MPreprocessedClips
 from dataset_features import Human36MFeatureClips
 from model import PHDFor3DJoints as PHD
-
 
 # -----------------------------
 # Metrics / Losses
@@ -39,11 +36,14 @@ def mpjpe_mm(pred: torch.Tensor, gt: torch.Tensor) -> float:
 def save_checkpoint(path: str, model: nn.Module, optim: torch.optim.Optimizer,
                     epoch: int, best_val: float, args: argparse.Namespace):
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    # handle nn.DataParallel case for saving only the underlying model state_dict
+    model_state = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
+    
     torch.save(
         {
             "epoch": epoch,
             "best_val": best_val,
-            "model": model.state_dict(),
+            "model": model_state,
             "optim": optim.state_dict(),
             "args": vars(args),
         },
@@ -94,10 +94,10 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, log_ever
         # NEW: dataset returns (feats, joints3d, joints2d, K)
         feats, joints3d, joints2d, K = batch
 
-        feats = feats.to(device)         # (B,T,2048)
-        joints3d = joints3d.to(device)   # (B,T,J,3)
-        joints2d = joints2d.to(device)   # (B,T,J,2) pixel coords in the *same* cropped/resized image space as video
-        K = K.to(device)                 # (3,3) or (B,3,3) or (B,T,3,3)
+        feats = feats.to(device, non_blocking=True)         # (B,T,2048)
+        joints3d = joints3d.to(device, non_blocking=True)   # (B,T,J,3)
+        joints2d = joints2d.to(device, non_blocking=True)   # (B,T,J,2) 
+        K = K.to(device, non_blocking=True)              # (3,3) or (B,3,3) or (B,T,3,3)
 
         optim.zero_grad(set_to_none=True)
 
@@ -196,10 +196,10 @@ def evaluate(model, loader, device, lambda_2d: float = 1.0):
 
         feats, joints3d, joints2d, K = batch
 
-        feats = feats.to(device)
-        joints3d = joints3d.to(device)
-        joints2d = joints2d.to(device)
-        K = K.to(device)
+        feats = feats.to(device, non_blocking=True)         # (B,T,2048)
+        joints3d = joints3d.to(device, non_blocking=True)   # (B,T,J,3)
+        joints2d = joints2d.to(device, non_blocking=True)   # (B,T,J,2)
+        K = K.to(device, non_blocking=True)            # (B,3,3) 
 
         t_fwd = time.time()
         _phi, _phi_hat, joints_pred, _joints_hat = model.forward_from_features(feats, predict_future=False)
@@ -255,9 +255,35 @@ def main():
     parser.add_argument("--log-every", type=int, default=50)
     args = parser.parse_args()
 
-    device = DEVICE
+    # set device and multi-GPU
+    if torch.cuda.is_available():
+        if args.gpu_ids is not None:
+            gpu_ids = [int(x) for x in args.gpu_ids.split(',')]
+            os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
+            device = torch.device(f"cuda:0")
+            num_gpus = len(gpu_ids)
+        else:
+            device = torch.device("cuda:0")
+            num_gpus = torch.cuda.device_count()
+            gpu_ids = list(range(num_gpus))
+    else:
+        device = torch.device("cpu")
+        num_gpus = 0
+        gpu_ids = []
+    
+    use_multi_gpu = num_gpus > 1 and not args.no_parallel
+
     os.makedirs(args.outdir, exist_ok=True)
 
+    effective_batch_size = args.batch_size
+    if use_multi_gpu:
+        # each GPU gets batch_size / num_gpus samples
+        per_gpu_batch_size = args.batch_size // num_gpus
+        effective_batch_size = per_gpu_batch_size * num_gpus
+        print(f"Multi-GPU training: {num_gpus} GPUs (IDs: {gpu_ids})")
+        print(f"Effective batch size: {effective_batch_size} ({per_gpu_batch_size} per GPU)")
+
+    # load data
     # load data
     train_set = Human36MFeatureClips(
         root=args.root,
@@ -276,30 +302,45 @@ def main():
         max_clips=args.max_val_clips,
     )
 
+    # DataLoader optimizations
+    loader_kwargs = {
+        'pin_memory': True if torch.cuda.is_available() else False,
+        'prefetch_factor': args.prefetch_factor if args.num_workers > 0 else None,
+        'persistent_workers': args.persistent_workers if args.num_workers > 0 else False,
+    }
+
     train_loader = DataLoader(
         train_set,
-        batch_size=args.batch_size,
+        batch_size=effective_batch_size,
         shuffle=True,
         num_workers=args.num_workers,
-        pin_memory=True,
         drop_last=True,
+        **loader_kwargs
     )
     val_loader = DataLoader(
         val_set,
-        batch_size=args.batch_size,
+        batch_size=effective_batch_size,
         shuffle=False,
         num_workers=max(1, args.num_workers // 2),
-        pin_memory=True,
         drop_last=False,
+        **loader_kwargs
     )
 
-    model = PHD(latent_dim=2048, joints_num=JOINTS_NUM, freeze_backbone=True).to(device)
+    model = PHD(latent_dim=2048, joints_num=JOINTS_NUM, freeze_backbone=True)
 
     # ----------------------------------
     # TRAINING PHASE 1 : freeze ResNet, train f_movie + f_3D
     # ----------------------------------
     for p in model.f_AR.parameters():
         p.requires_grad = False
+
+    # move to device before wrapping in DataParallel (if using)
+    model = model.to(device)
+    
+    # multi-GPU with nn.DataParallel
+    if use_multi_gpu:
+        print(f"Wrapping model in DataParallel with {num_gpus} GPUs")
+        model = nn.DataParallel(model, device_ids=gpu_ids)
 
     trainable = [p for p in model.parameters() if p.requires_grad]
     if len(trainable) == 0:
@@ -313,7 +354,11 @@ def main():
 
     if args.resume and os.path.isfile(args.resume):
         ckpt = torch.load(args.resume, map_location="cpu")
-        model.load_state_dict(ckpt["model"], strict=True)
+        # handle nn.DataParallel case for loading state_dict
+        if isinstance(model, nn.DataParallel):
+            model.module.load_state_dict(ckpt["model"], strict=True)
+        else:
+            model.load_state_dict(ckpt["model"], strict=True)
         optim.load_state_dict(ckpt["optim"])
         start_epoch = int(ckpt.get("epoch", 0)) + 1
         best_val = float(ckpt.get("best_val", best_val))
