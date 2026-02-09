@@ -257,15 +257,9 @@ def main():
 
     # set device and multi-GPU
     if torch.cuda.is_available():
-        if args.gpu_ids is not None:
-            gpu_ids = [int(x) for x in args.gpu_ids.split(',')]
-            os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
-            device = torch.device(f"cuda:0")
-            num_gpus = len(gpu_ids)
-        else:
-            device = torch.device("cuda:0")
-            num_gpus = torch.cuda.device_count()
-            gpu_ids = list(range(num_gpus))
+        device = torch.device("cuda:0")
+        num_gpus = torch.cuda.device_count()
+        gpu_ids = list(range(num_gpus))
     else:
         device = torch.device("cpu")
         num_gpus = 0
