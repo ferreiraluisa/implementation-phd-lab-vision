@@ -86,7 +86,7 @@ def project_with_K_torch(P_cam, K, eps=1e-6):
 
 
 
-def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, log_every: int = 100):
+def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, log_every: int = 500):
     model.train()
     epoch_start = time.time()
 
@@ -221,7 +221,7 @@ def evaluate(model, loader, device, lambda_2d: float = 1.0):
         K = K.to(device, non_blocking=True)            # (B,3,3) 
 
         t_fwd = time.time()
-        _phi, _phi_hat, joints_pred, _joints_hat = model.forward_from_features(feats, predict_future=False)
+        _phi, _phi_hat, joints_pred, _joints_hat = model.forward(feats, predict_future=False)
         timers["forward"] += (time.time() - t_fwd)
 
         l3d = (joints_pred - joints3d).pow(2).mean()
