@@ -27,6 +27,8 @@ from model import PHDFor3DJoints as PHD
 
 # Mean Per Joint Position Error (same units as your joints3d; often mm in H36M pipelines)
 # pred, gt: (B,T,J,3)
+# joints3d is in mm, tested in testing_dataloader.py
+# j3d abs mean: 1976.3987 min: -1266.9603 max: 6459.8936
 @torch.no_grad()
 def mpjpe_mm(pred: torch.Tensor, gt: torch.Tensor) -> float:
     err = torch.norm(pred - gt, dim=-1)  # (B,T,J)
@@ -125,20 +127,21 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, log_ever
         # --------------------
         t_fwd = time.time()
 
-        with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=(device.type == "cuda")):
-            # IMPORTANT: I precomputed ResNet features, so we must NOT pass video into the model
+        with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=(device.type=="cuda")):
+            #  IMPORTANT: I precomputed ResNet features, so we must NOT pass video into the model
             # We use a dedicated path that assumes feats = ResNet output (2048D)
-            _phi, _phi_hat, joints_pred, _joints_hat = model.forward(feats, predict_future=False)
-            # joints_pred: (B,T,J,3) assumed camera coordinates that match K
-
-            # 3D loss
+            _phi, _phi_hat, joints_pred, _ = model(feats, predict_future=False)
             l3d = (joints_pred - joints3d).pow(2).mean()
 
-            # 2D reprojection loss
-            proj2d = project_with_K_torch(joints_pred, K, eps=1e-6)  # (B,T,J,2)
-            l2d = (proj2d - joints2d).pow(2).mean()
+        # ----- 2D loss in fp32 (no autocast) -----
+        jp32 = joints_pred.float()
+        K32  = K.float()
+        j2d32 = joints2d.float()
 
-            loss = l3d + (lambda_2d * l2d)
+        proj2d = project_with_K_torch(jp32, K32, eps=1e-3)  # eps bigger than 1e-6
+        l2d = (proj2d - j2d32).pow(2).mean()
+
+        loss = l3d + (lambda_2d * l2d)
 
         timers["forward+loss"] += (time.time() - t_fwd)
 
@@ -379,20 +382,24 @@ def main():
 
     for epoch in range(start_epoch, args.epochs):
         print(f"\nEpoch {epoch+1}/{args.epochs}")
+        if epoch+1 <= 5:
+            lambda_2d = 0
+        else:
+            lambda_2d = args.lambda_2d
         t_epoch = time.time()
 
         tr_loss, tr_mpjpe = train(
             model, train_loader, optim, scaler, device,
-            lambda_2d=args.lambda_2d,
+            lambda_2d=lambda_2d,
             log_every=args.log_every
         )
         va_loss, va_mpjpe, va_l3d, va_l2d = evaluate(
             model, val_loader, device,
-            lambda_2d=args.lambda_2d
+            lambda_2d=lambda_2d
         )
 
         print(f"Train: loss={tr_loss:.6f} | mpjpe={tr_mpjpe:.3f}")
-        print(f"Val:   loss={va_loss:.6f} (3d {va_l3d:.6f} + {args.lambda_2d:.3g}*2d {va_l2d:.6f}) | mpjpe={va_mpjpe:.3f}")
+        print(f"Val:   loss={va_loss:.6f} (3d {va_l3d:.6f} + {lambda_2d:.3g}*2d {va_l2d:.6f}) | mpjpe={va_mpjpe:.3f}")
         print(f"Epoch time: {time.time() - t_epoch:.2f}s")
 
         save_checkpoint(
