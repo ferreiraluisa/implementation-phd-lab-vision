@@ -11,6 +11,8 @@ from config import DEVICE, SEQ_LEN, JOINTS_NUM
 from dataset_features import Human36MFeatureClips
 from model import PHDFor3DJoints as PHD
 from train import evaluate
+import torch.nn.functional as F
+
 
 
 """
@@ -76,8 +78,22 @@ def _pad_or_trim_video(video: np.ndarray, target_T: int) -> np.ndarray:
     pad = np.repeat(last, pad_n, axis=0)
     return np.concatenate([video, pad], axis=0)
 
+def _resize_video_hw(video_np: np.ndarray, out_hw: int) -> np.ndarray:
+    """
+    video_np: (T,H,W,3) uint8
+    returns:  (T,out_hw,out_hw,3) uint8
+    """
+    if out_hw is None:
+        return video_np
 
-def _load_video_clip_from_meta(preprocessed_root: str, meta: dict, seq_len: int) -> np.ndarray:
+    v = torch.from_numpy(video_np).permute(0, 3, 1, 2).float() / 255.0  # (T,3,H,W)
+    v = F.interpolate(v, size=(out_hw, out_hw), mode="bilinear", align_corners=False)
+    v = (v.clamp(0, 1) * 255.0).byte().permute(0, 2, 3, 1).cpu().numpy()  # (T,H,W,3)
+    return v
+
+
+
+def _load_video_clip_from_meta(preprocessed_root: str, meta: dict, seq_len: int, out_hw: int = None) -> np.ndarray:
     video_path = _find_video_path(preprocessed_root, meta)
 
     start = int(meta["start"])
@@ -95,6 +111,7 @@ def _load_video_clip_from_meta(preprocessed_root: str, meta: dict, seq_len: int)
 
     video_np = frames.numpy().astype(np.uint8)  # (T,H,W,3)
     video_np = _pad_or_trim_video(video_np, seq_len)
+    video_np = _resize_video_hw(video_np, out_hw)
     return video_np
 
 
@@ -128,7 +145,11 @@ def main():
     parser.add_argument("--out", type=str, default="outputs/batch_result_S9.npz")
     parser.add_argument("--device", type=str, default=DEVICE)
     parser.add_argument("--save-n", type=int, default=16, help="How many samples from the batch to save")
+    parser.add_argument("--video-size", type=int, default=224,
+                    help="Resize saved videos to video_size x video_size before stacking (use 0 to disable).")
+
     args = parser.parse_args()
+    out_hw = None if args.video_size == 0 else args.video_size
 
     device = _safe_device(args.device)
 
@@ -191,7 +212,7 @@ def main():
         if not isinstance(meta_b, dict):
             raise RuntimeError(f"Expected meta[{b}] to be dict, got {type(meta_b)}")
 
-        video_b = _load_video_clip_from_meta(args.preprocessed_root, meta_b, seq_len=args.seq_len)
+        video_b = _load_video_clip_from_meta(args.preprocessed_root, meta_b, seq_len=args.seq_len, out_hw=out_hw)
         videos.append(video_b)
         metas_payload.append(meta_b)
 
