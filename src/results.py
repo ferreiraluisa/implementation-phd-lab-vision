@@ -130,7 +130,7 @@ def main():
     model.eval()
 
     # --------- Evaluate metrics on all test ----------
-    test_metrics = evaluate(model, test_loader, device=device)
+    test_metrics = evaluate(model, test_loader, device=device, test_set=True)
     test_metrics = {k: float(v) for k, v in test_metrics.items()}
     print("Test metrics:", test_metrics)
 
