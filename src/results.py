@@ -130,9 +130,12 @@ def main():
     model.eval()
 
     # --------- Evaluate metrics on all test ----------
-    test_metrics = evaluate(model, test_loader, device=device, test_set=True)
-    test_metrics = {k: float(v) for k, v in test_metrics.items()}
-    print("Test metrics:", test_metrics)
+    avg_loss, avg_mpjpe, avg_l3d, avg_l2d = evaluate(model, test_loader, device=device)
+
+    print(
+        f"Test metrics | loss: {avg_loss:.6f} | mpjpe (m): {avg_mpjpe:.6f} "
+        f"| mpjpe (mm): {avg_mpjpe*1000.0:.2f} | l3d: {avg_l3d:.6f} | l2d: {avg_l2d:.6f}"
+    )
 
     # --------- Dump one example ----------
     batch = next(iter(test_loader))
