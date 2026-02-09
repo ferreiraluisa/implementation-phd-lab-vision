@@ -43,5 +43,5 @@ class Human36MFeatureClips(Dataset):
         return len(self.files)
 
     def __getitem__(self, idx: int):
-        d = torch.load(self.files[idx], map_location="cpu")
+        d = torch.load(self.files[idx], map_location="cpu", weights_only=True)
         return d["feats"], d["joints3d"], d["joints2d"], d["K"]

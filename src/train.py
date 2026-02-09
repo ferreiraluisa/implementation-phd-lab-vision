@@ -57,14 +57,33 @@ def save_checkpoint(path: str, model: nn.Module, optim: torch.optim.Optimizer,
 #      [0,  0,  1]]
 # K * P_cam = [u, v, w]  =>  uv = [u/w, v/w](2d pixels)
 def project_with_K_torch(P_cam, K, eps=1e-6):
-    # P_cam: (...,3)
-    # K: (3,3) or (...,3,3) broadcastable to P_cam
-    P_col = P_cam.unsqueeze(-1)                           # (...,3,1)
-    P_h = torch.matmul(K, P_col).squeeze(-1)              # (...,3)
+    """
+    P_cam: (B,T,J,3)  or (...,3)
+    K:     (3,3) or (B,3,3) or (B,T,3,3)
+    returns: (B,T,J,2) or (...,2)
+    """
+    # Ensure K is broadcastable to P_cam (...,3,1)
+    # P_col has shape (...,3,1)
+    P_col = P_cam.unsqueeze(-1)
 
+    if K.dim() == 2:
+        # (3,3) -> (1,1,1,3,3) (works for B,T,J)
+        while K.dim() < P_col.dim():
+            K = K.unsqueeze(0)
+    elif K.dim() == 3:
+        # (B,3,3) -> (B,1,1,3,3)
+        K = K[:, None, None, :, :]
+    elif K.dim() == 4:
+        # (B,T,3,3) -> (B,T,1,3,3)
+        K = K[:, :, None, :, :]
+    else:
+        raise ValueError(f"Unexpected K shape: {tuple(K.shape)}")
+
+    P_h = torch.matmul(K, P_col).squeeze(-1)  # (...,3)
     z = P_h[..., 2:3].clamp(min=eps)
-    uv = P_h[..., 0:2] / z                                # (...,2)
+    uv = P_h[..., 0:2] / z
     return uv
+
 
 
 def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, log_every: int = 100):
@@ -334,7 +353,7 @@ def main():
     optim = torch.optim.AdamW(trainable, lr=args.lr, weight_decay=1e-4)
 
     use_cuda = device.type == "cuda"
-    scaler = torch.cuda.amp.GradScaler(enabled=use_cuda)
+    scaler = torch.amp.GradScaler('cuda', enabled=use_cuda)
 
     start_epoch = 0
     best_val = float("inf")
