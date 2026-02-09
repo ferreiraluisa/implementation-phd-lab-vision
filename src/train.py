@@ -28,7 +28,7 @@ from model import PHDFor3DJoints as PHD
 # Mean Per Joint Position Error (same units as your joints3d; often mm in H36M pipelines)
 # pred, gt: (B,T,J,3)
 @torch.no_grad()
-def mpjpe_mm(pred: torch.Tensor, gt: torch.Tensor) -> float:
+def mpjpe_m(pred: torch.Tensor, gt: torch.Tensor) -> float:
     err = torch.norm(pred - gt, dim=-1)  # (B,T,J)
     return float(err.mean().item())
 
@@ -115,7 +115,6 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0,
 
     # this measures the time between iterations (i.e., DataLoader + host work)
     end_data = time.time()
-
     for it, batch in enumerate(loader):
         t_iter_start = time.time()
 
@@ -180,7 +179,7 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0,
         running_loss += float(loss.item())
         running_l3d += float(l3d.item())
         running_l2d += float(l2d.item())
-        running_mpjpe += mpjpe_mm(joints_pred.detach(), joints3d.detach())
+        running_mpjpe += mpjpe_m(joints_pred.detach(), joints3d.detach())
         n_batches += 1
 
         t_iter_end = time.time()
@@ -214,7 +213,7 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0,
 
 @torch.no_grad()
 def evaluate(model, loader, device, lambda_2d: float = 1.0, 
-             epoch: int = 0, warmup_epochs: int = 10):
+             epoch: int = 0, warmup_epochs: int = 10, test_set: bool = False):
     model.eval()
 
     total_loss = 0.0
@@ -235,8 +234,10 @@ def evaluate(model, loader, device, lambda_2d: float = 1.0,
     for batch in loader:
         t_iter_start = time.time()
         timers["data"] += (t_iter_start - end_data)
-
-        feats, joints3d, joints2d, K = batch
+        if test_set:
+            feats, joints3d, joints2d, K, meta = batch
+        else:
+            feats, joints3d, joints2d, K = batch
 
         feats = feats.to(device, non_blocking=True)         # (B,T,2048)
         joints3d = joints3d.to(device, non_blocking=True)   # (B,T,J,3)
@@ -260,7 +261,7 @@ def evaluate(model, loader, device, lambda_2d: float = 1.0,
         total_loss += float(loss.item())
         total_l3d += float(l3d.item())
         total_l2d += float(l2d.item())
-        total_mpjpe += mpjpe_mm(joints_pred, joints3d)
+        total_mpjpe += mpjpe_m(joints_pred, joints3d)
         n_batches += 1
 
         t_iter_end = time.time()
