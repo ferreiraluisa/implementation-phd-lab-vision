@@ -130,7 +130,7 @@ def main():
     model.eval()
 
     # --------- Evaluate metrics on all test ----------
-    avg_loss, avg_mpjpe, avg_l3d, avg_l2d = evaluate(model, test_loader, device=device)
+    avg_loss, avg_mpjpe, avg_l3d, avg_l2d = evaluate(model, test_loader, device=device, test_set=True)
 
     print(
         f"Test metrics | loss: {avg_loss:.6f} | mpjpe (m): {avg_mpjpe:.6f} "
