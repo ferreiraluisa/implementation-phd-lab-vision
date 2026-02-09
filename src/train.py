@@ -291,11 +291,11 @@ def main():
     )
 
     # DataLoader optimizations
-    loader_kwargs = {
-        'pin_memory': True if torch.cuda.is_available() else False,
-        'prefetch_factor': args.prefetch_factor if args.num_workers > 0 else None,
-        'persistent_workers': args.persistent_workers if args.num_workers > 0 else False,
-    }
+    # loader_kwargs = {
+    #     'pin_memory': True if torch.cuda.is_available() else False,
+    #     'prefetch_factor': args.prefetch_factor if args.num_workers > 0 else None,
+    #     'persistent_workers': args.persistent_workers if args.num_workers > 0 else False,
+    # }
 
     train_loader = DataLoader(
         train_set,
