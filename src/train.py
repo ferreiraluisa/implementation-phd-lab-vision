@@ -333,7 +333,8 @@ def main():
         raise RuntimeError("No trainable parameters found. Did you accidentally freeze everything?")
     optim = torch.optim.AdamW(trainable, lr=args.lr, weight_decay=1e-4)
 
-    scaler = torch.amp.GradScaler(device_type="cuda", enabled=(device.type == "cuda"))
+    use_cuda = device.type == "cuda"
+    scaler = torch.cuda.amp.GradScaler(enabled=use_cuda)
 
     start_epoch = 0
     best_val = float("inf")
