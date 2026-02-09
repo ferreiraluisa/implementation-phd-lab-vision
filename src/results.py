@@ -124,7 +124,8 @@ def main():
 
     # --------- Load model ----------
     model = PHD(joints_num=JOINTS_NUM).to(device)
-    state = torch.load(args.model_path, map_location=device)
+    ckpt = torch.load(args.model_path, map_location=device)
+    state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
     model.load_state_dict(state, strict=True)
     model.eval()
 
