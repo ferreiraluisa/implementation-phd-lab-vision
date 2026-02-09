@@ -123,7 +123,7 @@ def main():
     )
 
     # --------- Load model ----------
-    model = PHD(joints_num=JOINTS_NUM, predict_future=False).to(device)
+    model = PHD(joints_num=JOINTS_NUM).to(device)
     state = torch.load(args.model_path, map_location=device)
     model.load_state_dict(state, strict=True)
     model.eval()
