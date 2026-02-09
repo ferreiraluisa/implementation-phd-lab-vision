@@ -44,4 +44,4 @@ class Human36MFeatureClips(Dataset):
 
     def __getitem__(self, idx: int):
         d = torch.load(self.files[idx], map_location="cpu", weights_only=True)
-        return d["feats"], d["joints3d"], d["joints2d"], d["K"]
+        return d["feats"], d["joints3d"]/1000, d["joints2d"], d["K"] # convert joints3d from mm to m for training, since the original values are in mm and can be large, which may cause instability during training. 
