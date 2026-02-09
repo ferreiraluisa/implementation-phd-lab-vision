@@ -282,17 +282,11 @@ def main():
     train_set = Human36MFeatureClips(
         root=args.root,
         subjects=[1, 6, 7, 8],
-        seq_len=args.seq_len,
-        frame_skip=args.frame_skip,
-        stride=args.stride,
         max_clips=args.max_train_clips,
     )
     val_set = Human36MFeatureClips(
         root=args.root,
         subjects=[5],
-        seq_len=args.seq_len,
-        frame_skip=args.frame_skip,
-        stride=max(1, args.stride),
         max_clips=args.max_val_clips,
     )
 
