@@ -106,7 +106,7 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, log_ever
         # --------------------
         t_fwd = time.time()
 
-        with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=(device.startswith("cuda"))):
+        with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=(device.type == "cuda")):
             # IMPORTANT: I precomputed ResNet features, so we must NOT pass video into the model
             # We use a dedicated path that assumes feats = ResNet output (2048D)
             _phi, _phi_hat, joints_pred, _joints_hat = model.forward(feats, predict_future=False)
