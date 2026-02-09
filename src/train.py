@@ -96,7 +96,7 @@ def project_with_K_torch(P_cam, K, eps=1e-6):
 
 
 def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, 
-          epoch: int = 0, warmup_epochs: int = 10, log_every: int = 500):
+          epoch: int = 0, warmup_epochs: int = 5, log_every: int = 500):
     model.train()
     epoch_start = time.time()
 
@@ -213,7 +213,7 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0,
 
 @torch.no_grad()
 def evaluate(model, loader, device, lambda_2d: float = 1.0, 
-             epoch: int = 0, warmup_epochs: int = 10, test_set: bool = False):
+             epoch: int = 0, warmup_epochs: int = 5, test_set: bool = False):
     model.eval()
 
     total_loss = 0.0
@@ -297,11 +297,11 @@ def main():
     parser.add_argument("--max-train-clips", type=int, default=None)
     parser.add_argument("--max-val-clips", type=int, default=None)
     parser.add_argument("--lambda-2d", type=float, default=1.0, help="2D reprojection loss weight")
-    parser.add_argument("--warmup-epochs", type=int, default=10, 
+    parser.add_argument("--warmup-epochs", type=int, default=5, 
                         help="Train only 3D loss for this many epochs before adding 2D loss")
     parser.add_argument("--outdir", type=str, default="./runs/phase1")
     parser.add_argument("--resume", type=str, default=None)
-    parser.add_argument("--log-every", type=int, default=50)
+    parser.add_argument("--log-every", type=int, default=500)
     args = parser.parse_args()
 
     # set device and multi-GPU
