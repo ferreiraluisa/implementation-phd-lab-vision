@@ -274,7 +274,7 @@ def main():
     parser.add_argument("--lambda-2d", type=float, default=1.0, help="2D reprojection loss weight")
     parser.add_argument("--outdir", type=str, default="./runs/phase1")
     parser.add_argument("--resume", type=str, default=None)
-    parser.add_argument("--log-every", type=int, default=50)
+    parser.add_argument("--log-every", type=int, default=500)
     args = parser.parse_args()
 
     # set device and multi-GPU
