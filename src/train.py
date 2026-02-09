@@ -265,7 +265,7 @@ def main():
         num_gpus = 0
         gpu_ids = []
     
-    use_multi_gpu = num_gpus > 1 and not args.no_parallel
+    use_multi_gpu = num_gpus > 1 
 
     os.makedirs(args.outdir, exist_ok=True)
 
