@@ -42,6 +42,28 @@ def _find_video_path(preprocessed_root: str, meta: dict) -> str:
         raise FileNotFoundError(f"No mp4 found under {cam_dir}")
     return mp4s[0]
 
+def collate_with_meta(batch):
+    # batch: list of samples returned by Dataset.__getitem__
+    # each sample is either (feats,j3d,j2d,K) or (feats,j3d,j2d,K,meta)
+    if len(batch[0]) == 5:
+        feats, j3d, j2d, K, meta = zip(*batch)
+        return (
+            torch.stack(feats, 0),
+            torch.stack(j3d, 0),
+            torch.stack(j2d, 0),
+            torch.stack(K, 0),
+            list(meta),  # keep python dicts as-is
+        )
+    else:
+        feats, j3d, j2d, K = zip(*batch)
+        return (
+            torch.stack(feats, 0),
+            torch.stack(j3d, 0),
+            torch.stack(j2d, 0),
+            torch.stack(K, 0),
+        )
+
+
 
 def _load_video_clip_from_meta(preprocessed_root: str, meta: dict) -> np.ndarray:
     """
@@ -120,6 +142,7 @@ def main():
         num_workers=args.num_workers,
         drop_last=True,
         pin_memory=(device.type == "cuda"),
+        collate_fn=collate_with_meta,  # to handle meta in test set
     )
 
     # --------- Load model ----------
@@ -151,11 +174,7 @@ def main():
             "Make sure test_set=True returns (feats, j3d, j2d, K, meta)."
         )
 
-    # meta from DataLoader is often a list of dicts (length B)
-    if isinstance(meta, (list, tuple)):
-        meta_0 = meta[0]
-    else:
-        meta_0 = meta
+    meta_0 = meta[0] 
 
     if not isinstance(meta_0, dict):
         raise RuntimeError(f"Expected meta[0] to be a dict, got: {type(meta_0)}")
@@ -171,7 +190,7 @@ def main():
         joints3d=joints3d_gt_0,
         predicted3djoints=joints3d_pred_0,
         meta=meta_payload,
-        test_metrics=np.array(test_metrics, dtype=object),
+        test_metrics=np.array([avg_loss, avg_mpjpe, avg_l3d, avg_l2d], dtype=object),
     )
 
     print(f"[OK] Saved example to: {args.out}")
