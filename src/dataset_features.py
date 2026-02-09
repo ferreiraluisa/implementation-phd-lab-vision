@@ -10,10 +10,10 @@ from torch.utils.data import Dataset
 Coded by Luísa Ferreira, 2026
 """
 class Human36MFeatureClips(Dataset):
-    def __init__(self, feat_root: str, subjects: Optional[List[int]] = None, max_clips: Optional[int] = None):
-        self.feat_root = feat_root
+    def __init__(self, root: str, subjects: Optional[List[int]] = None, max_clips: Optional[int] = None):
+        self.root = root
 
-        pattern = os.path.join(feat_root, "S*", "*", "cam_*", "clip_*.pt")
+        pattern = os.path.join(root, "S*", "*", "cam_*", "clip_*.pt")
         files = sorted(glob.glob(pattern))
         
 
@@ -35,7 +35,7 @@ class Human36MFeatureClips(Dataset):
             files = files[:max_clips]
 
         if len(files) == 0:
-            raise RuntimeError(f"No cached clips found under {feat_root}")
+            raise RuntimeError(f"No cached clips found under {root}")
 
         self.files = files
 
