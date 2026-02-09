@@ -9,6 +9,9 @@
 source ~/.bashrc
 conda activate h36m
 
+# Increase file descriptor limit to prevent "Too many open files" error
+ulimit -n 8192
+
 which python
 python -V
 
@@ -17,5 +20,6 @@ nvidia-smi -l 1800 &
 python -u src/preprocess_resnet_features.py \
   --root /home/s26ldeso/Human3.6M_preprocessed \
   --out /home/s26ldeso/Human3.6M_preprocessed_resnet_features \
-  --batch-size 32
-
+  --batch-size 32 \
+  --num-workers 2 \
+  --subjects 6 7 8 9 11

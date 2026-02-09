@@ -104,8 +104,8 @@ def main():
         num_workers=args.num_workers,
         pin_memory=device.startswith("cuda"),
         drop_last=False,
-        prefetch_factor=4,  
-        persistent_workers=True,  # keep workers alive for the entire epoch, faster than respawning each time
+        prefetch_factor=2,  
+        # persistent_workers=True,  # keep workers alive for the entire epoch, faster than respawning each time
     )
 
     # ResNet50 backbone
@@ -172,6 +172,9 @@ def main():
             global_i += 1
 
             rel_dir = Path(f"S{clip.subject}") / clip.action / f"{clip.cam}"
+            if rel_dir.exists():
+                print(f"Warning: Directory {rel_dir} already exists, skipping clip {clip} to avoid overwriting.")
+                continue
             save_dir = out_root / rel_dir
             save_dir.mkdir(parents=True, exist_ok=True)
 
