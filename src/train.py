@@ -303,7 +303,6 @@ def main():
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
-        **loader_kwargs
     )
     val_loader = DataLoader(
         val_set,
@@ -311,7 +310,6 @@ def main():
         shuffle=False,
         num_workers=max(1, args.num_workers // 2),
         drop_last=False,
-        **loader_kwargs
     )
 
     model = PHD(latent_dim=2048, joints_num=JOINTS_NUM, freeze_backbone=True)
