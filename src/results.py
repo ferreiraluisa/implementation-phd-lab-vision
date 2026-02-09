@@ -124,7 +124,8 @@ def main():
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--model_path", type=str, required=True,
                         help="Path to checkpoint saved by train.py (state_dict)")
-    parser.add_argument("--out", type=str, default="example_result_S9.npz")
+    parser.add_argument("--out", type=str, default="outputs/batch_result_S9.npz")
+
     args = parser.parse_args()
 
     device = torch.device(DEVICE if (DEVICE.startswith("cuda") and torch.cuda.is_available()) else "cpu")
@@ -160,13 +161,9 @@ def main():
         f"| mpjpe (mm): {avg_mpjpe*1000.0:.2f} | l3d: {avg_l3d:.6f} | l2d: {avg_l2d:.6f}"
     )
 
-    # --------- Dump one example ----------
+     # --------- Dump one BATCH ----------
     batch = next(iter(test_loader))
     joints3d_gt, joints3d_pred, meta = _predict_one_batch(model, batch, device)
-
-    # take the first element in the batch
-    joints3d_gt_0 = joints3d_gt[0].detach().cpu().numpy()        # (T,J,3)  in meters (your dataset_features divides by 1000)
-    joints3d_pred_0 = joints3d_pred[0].detach().cpu().numpy()    # (T,J,3)  in meters
 
     if meta is None:
         raise RuntimeError(
@@ -174,27 +171,44 @@ def main():
             "Make sure test_set=True returns (feats, j3d, j2d, K, meta)."
         )
 
-    meta_0 = meta[0] 
+    B = joints3d_gt.shape[0]
 
-    if not isinstance(meta_0, dict):
-        raise RuntimeError(f"Expected meta[0] to be a dict, got: {type(meta_0)}")
+    # Convert whole batch to numpy
+    joints3d_gt_np = joints3d_gt.detach().cpu().numpy()      # (B,T,J,3)
+    joints3d_pred_np = joints3d_pred.detach().cpu().numpy()  # (B,T,J,3)
 
-    video_np = _load_video_clip_from_meta(args.preprocessed_root, meta_0)  # (T,H,W,3) uint8
+    # Load videos for each sample in batch
+    videos = []
+    metas_payload = []
+    for b in range(B):
+        meta_b = meta[b]
+        if not isinstance(meta_b, dict):
+            raise RuntimeError(f"Expected meta[{b}] to be dict, got {type(meta_b)}")
 
-    # Save meta safely inside npz
-    meta_payload = np.array(meta_0, dtype=object)
+        video_b = _load_video_clip_from_meta(args.preprocessed_root, meta_b)  # (T,H,W,3) uint8
+        videos.append(video_b)
+
+        # keep meta as python object inside npz
+        metas_payload.append(meta_b)
+
+    # Stack videos: requires all videos have same shape (they should: same seq_len + same resolution)
+    videos_np = np.stack(videos, axis=0)  # (B,T,H,W,3)
+
+    # Ensure output directory exists
+    out_path = args.out
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
     np.savez_compressed(
-        args.out,
-        video=video_np,
-        joints3d=joints3d_gt_0,
-        predicted3djoints=joints3d_pred_0,
-        meta=meta_payload,
+        out_path,
+        video=videos_np,                       # (B,T,H,W,3) uint8
+        joints3d=joints3d_gt_np,               # (B,T,J,3)
+        predicted3djoints=joints3d_pred_np,    # (B,T,J,3)
+        meta=np.array(metas_payload, dtype=object),
         test_metrics=np.array([avg_loss, avg_mpjpe, avg_l3d, avg_l2d], dtype=object),
     )
 
-    print(f"[OK] Saved example to: {args.out}")
-    print(f"video shape: {video_np.shape} | joints3d: {joints3d_gt_0.shape} | pred: {joints3d_pred_0.shape}")
+    print(f"[OK] Saved batch to: {out_path}")
+    print(f"video shape: {videos_np.shape} | joints3d: {joints3d_gt_np.shape} | pred: {joints3d_pred_np.shape}")
 
 
 if __name__ == "__main__":
