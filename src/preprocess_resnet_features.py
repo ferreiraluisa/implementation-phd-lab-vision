@@ -122,11 +122,13 @@ def main():
         backbone = nn.DataParallel(backbone)
 
     # Compile for massive speedup (PyTorch 2.0+)
-    try:
-        backbone = torch.compile(backbone, mode="max-autotune")
-        print("✓ Model compiled successfully - expect 2-3x speedup!")
-    except Exception as e:
-        print(f"Warning: torch.compile failed ({e}), continuing without compilation")
+    use_compile = (not use_dp) and device.startswith("cuda")
+    if use_compile:
+        try:
+            backbone = torch.compile(backbone, mode="max-autotune")
+            print("Using torch.compile(backbone)")
+        except Exception as e:
+            print(f"Warning: torch.compile failed ({e}), continuing without compilation")
 
     # async writer
     writer = AsyncFileWriter() 
