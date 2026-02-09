@@ -50,6 +50,15 @@ def save_checkpoint(path: str, model: nn.Module, optim: torch.optim.Optimizer,
         path,
     )
 
+def get_2d_weight(epoch, warmup_epochs=10, target_lambda=1.0):
+    """Linearly ramp up 2D loss weight from 0 to target_lambda"""
+    if epoch < warmup_epochs:
+        return 0.0
+    elif epoch < warmup_epochs + 10:  # Ramp up over 10 epochs
+        progress = (epoch - warmup_epochs) / 10.0
+        return target_lambda * progress
+    else:
+        return target_lambda
 
 # OPTION 1: project with intrinsic matrix K only (no distortion)
 # K = [[fx, 0, cx],
@@ -86,7 +95,8 @@ def project_with_K_torch(P_cam, K, eps=1e-6):
 
 
 
-def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, log_every: int = 500):
+def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, 
+          epoch: int = 0, warmup_epochs: int = 10, log_every: int = 500):
     model.train()
     epoch_start = time.time()
 
@@ -95,6 +105,10 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, log_ever
     running_l2d = 0.0
     running_mpjpe = 0.0
     n_batches = 0
+
+    # disable 2D loss during warmup
+    use_2d_loss = (epoch >= warmup_epochs)
+    effective_lambda_2d = get_2d_weight(epoch, warmup_epochs, lambda_2d) if use_2d_loss else 0.0
 
     # timers for each thing (data / forward / backward / total)
     timers = defaultdict(float)
@@ -134,11 +148,14 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, log_ever
             # 3D loss
             l3d = (joints_pred - joints3d).pow(2).mean()
 
-            # 2D reprojection loss
-            proj2d = project_with_K_torch(joints_pred, K, eps=1e-6)  # (B,T,J,2)
-            l2d = (proj2d - joints2d).pow(2).mean()
+            # 2D reprojection loss (only after warmup)
+            if use_2d_loss:
+                proj2d = project_with_K_torch(joints_pred, K, eps=1e-6)  # (B,T,J,2)
+                l2d = (proj2d - joints2d).pow(2).mean()
+            else:
+                l2d = torch.tensor(0.0, device=device)
 
-            loss = l3d + (lambda_2d * l2d)
+            loss = l3d + (effective_lambda_2d * l2d)
 
         timers["forward+loss"] += (time.time() - t_fwd)
 
@@ -172,10 +189,11 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, log_ever
 
         if log_every > 0 and (it + 1) % log_every == 0:
             dt_epoch = time.time() - epoch_start
+            status = "[3D only]" if not use_2d_loss else "[3D+2D]"
             print(
-                f"  iter {it+1:05d}/{len(loader):05d} | "
+                f"  {status} iter {it+1:05d}/{len(loader):05d} | "
                 f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f} + "
-                f"{lambda_2d:.3g}*2d {running_l2d/n_batches:.6f}) | "
+                f"{effective_lambda_2d:.3g}*2d {running_l2d/n_batches:.6f}) | "
                 f"mpjpe {running_mpjpe/n_batches:.3f} | "
                 f"time/iter {timers['iter']/n_batches:.4f}s | "
                 f"epoch {dt_epoch:.1f}s"
@@ -195,7 +213,8 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, log_ever
 
 
 @torch.no_grad()
-def evaluate(model, loader, device, lambda_2d: float = 1.0):
+def evaluate(model, loader, device, lambda_2d: float = 1.0, 
+             epoch: int = 0, warmup_epochs: int = 10):
     model.eval()
 
     total_loss = 0.0
@@ -203,6 +222,10 @@ def evaluate(model, loader, device, lambda_2d: float = 1.0):
     total_l2d = 0.0
     total_mpjpe = 0.0
     n_batches = 0
+
+    # Disable 2D loss during warmup
+    use_2d_loss = (epoch >= warmup_epochs)
+    effective_lambda_2d = lambda_2d if use_2d_loss else 0.0
 
     # timing for evaluation
     t_eval_start = time.time()
@@ -225,10 +248,14 @@ def evaluate(model, loader, device, lambda_2d: float = 1.0):
         timers["forward"] += (time.time() - t_fwd)
 
         l3d = (joints_pred - joints3d).pow(2).mean()
-        proj2d = project_with_K_torch(joints_pred, K, eps=1e-6)
-        l2d = (proj2d - joints2d).pow(2).mean()
+        
+        if use_2d_loss:
+            proj2d = project_with_K_torch(joints_pred, K, eps=1e-6)
+            l2d = (proj2d - joints2d).pow(2).mean()
+        else:
+            l2d = torch.tensor(0.0, device=device)
 
-        loss = l3d + (lambda_2d * l2d)
+        loss = l3d + (effective_lambda_2d * l2d)
 
         total_loss += float(loss.item())
         total_l3d += float(l3d.item())
@@ -269,6 +296,8 @@ def main():
     parser.add_argument("--max-train-clips", type=int, default=None)
     parser.add_argument("--max-val-clips", type=int, default=None)
     parser.add_argument("--lambda-2d", type=float, default=1.0, help="2D reprojection loss weight")
+    parser.add_argument("--warmup-epochs", type=int, default=10, 
+                        help="Train only 3D loss for this many epochs before adding 2D loss")
     parser.add_argument("--outdir", type=str, default="./runs/phase1")
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--log-every", type=int, default=50)
@@ -296,7 +325,6 @@ def main():
         print(f"Multi-GPU training: {num_gpus} GPUs (IDs: {gpu_ids})")
         print(f"Effective batch size: {effective_batch_size} ({per_gpu_batch_size} per GPU)")
 
-    # load data
     # load data
     train_set = Human36MFeatureClips(
         root=args.root,
@@ -374,25 +402,36 @@ def main():
     print(f"Device: {device}")
     print(f"Train clips: {len(train_set)} | Val clips: {len(val_set)}")
     print(f"Seq len: {args.seq_len} | Batch size: {args.batch_size} | LR: {args.lr}")
-    print(f"Lambda 2D: {args.lambda_2d}")
+    print(f"Lambda 2D: {args.lambda_2d} (active after epoch {args.warmup_epochs})")
+    print(f"Warmup: {args.warmup_epochs} epochs (3D loss only)")
     print("============================")
 
     for epoch in range(start_epoch, args.epochs):
         print(f"\nEpoch {epoch+1}/{args.epochs}")
+        if epoch < args.warmup_epochs:
+            print(f"[WARMUP {epoch+1}/{args.warmup_epochs}] Training with 3D loss only")
+        else:
+            print(f"[FULL TRAINING] Using 3D + 2D loss (lambda_2d={args.lambda_2d})")
+        
         t_epoch = time.time()
 
         tr_loss, tr_mpjpe = train(
             model, train_loader, optim, scaler, device,
             lambda_2d=args.lambda_2d,
+            epoch=epoch,
+            warmup_epochs=args.warmup_epochs,
             log_every=args.log_every
         )
         va_loss, va_mpjpe, va_l3d, va_l2d = evaluate(
             model, val_loader, device,
-            lambda_2d=args.lambda_2d
+            lambda_2d=args.lambda_2d,
+            epoch=epoch,
+            warmup_epochs=args.warmup_epochs
         )
 
+        effective_lambda_display = args.lambda_2d if epoch >= args.warmup_epochs else 0.0
         print(f"Train: loss={tr_loss:.6f} | mpjpe={tr_mpjpe:.3f}")
-        print(f"Val:   loss={va_loss:.6f} (3d {va_l3d:.6f} + {args.lambda_2d:.3g}*2d {va_l2d:.6f}) | mpjpe={va_mpjpe:.3f}")
+        print(f"Val:   loss={va_loss:.6f} (3d {va_l3d:.6f} + {effective_lambda_display:.3g}*2d {va_l2d:.6f}) | mpjpe={va_mpjpe:.3f}")
         print(f"Epoch time: {time.time() - t_epoch:.2f}s")
 
         save_checkpoint(
