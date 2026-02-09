@@ -132,9 +132,9 @@ class PHDFor3DJoints(nn.Module):
         # self.backbone = nn.Sequential(*list(resnet.children())[:-1])
         # commented out bc we don't want to extract features here, only in preprocess_resnet_features.py
 
-        if freeze_backbone:
-            for p in self.backbone.parameters():
-                p.requires_grad = False
+        # if freeze_backbone:
+        #     for p in self.backbone.parameters():
+        #         p.requires_grad = False
 
         self.latent_dim = latent_dim
 
