@@ -223,7 +223,9 @@ def evaluate(model, loader, device, lambda_2d: float = 1.0,
     n_batches = 0
 
     # Disable 2D loss during warmup
-    use_2d_loss = (epoch >= warmup_epochs)
+    # use_2d_loss = (epoch >= warmup_epochs)
+    # training only with 3d loss
+    use_2d_loss = False
     effective_lambda_2d = lambda_2d if use_2d_loss else 0.0
 
     # timing for evaluation
@@ -403,16 +405,17 @@ def main():
     print(f"Device: {device}")
     print(f"Train clips: {len(train_set)} | Val clips: {len(val_set)}")
     print(f"Seq len: {args.seq_len} | Batch size: {args.batch_size} | LR: {args.lr}")
-    print(f"Lambda 2D: {args.lambda_2d} (active after epoch {args.warmup_epochs})")
-    print(f"Warmup: {args.warmup_epochs} epochs (3D loss only)")
+    # print(f"Lambda 2D: {args.lambda_2d} (active after epoch {args.warmup_epochs})")
+    # print(f"Warmup: {args.warmup_epochs} epochs (3D loss only)")
     print("============================")
 
     for epoch in range(start_epoch, args.epochs):
         print(f"\nEpoch {epoch+1}/{args.epochs}")
-        if epoch < args.warmup_epochs:
-            print(f"[WARMUP {epoch+1}/{args.warmup_epochs}] Training with 3D loss only")
-        else:
-            print(f"[FULL TRAINING] Using 3D + 2D loss (lambda_2d={args.lambda_2d})")
+        # if epoch < args.warmup_epochs:
+        #     print(f"[WARMUP {epoch+1}/{args.warmup_epochs}] Training with 3D loss only")
+        # else:
+        #     print(f"[FULL TRAINING] Using 3D + 2D loss (lambda_2d={args.lambda_2d})")
+        print("Training with 3D loss only")
         
         t_epoch = time.time()
 
@@ -430,7 +433,8 @@ def main():
             warmup_epochs=args.warmup_epochs
         )
 
-        effective_lambda_display = args.lambda_2d if epoch >= args.warmup_epochs else 0.0
+        # effective_lambda_display = args.lambda_2d if epoch >= args.warmup_epochs else 0.0
+        effective_lambda_display = 0.0
         print(f"Train: loss={tr_loss:.6f} | mpjpe={tr_mpjpe:.3f}")
         print(f"Val:   loss={va_loss:.6f} (3d {va_l3d:.6f} + {effective_lambda_display:.3g}*2d {va_l2d:.6f}) | mpjpe={va_mpjpe:.3f}")
         print(f"Epoch time: {time.time() - t_epoch:.2f}s")
