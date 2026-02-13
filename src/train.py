@@ -107,7 +107,8 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0,
     n_batches = 0
 
     # disable 2D loss during warmup
-    use_2d_loss = (epoch >= warmup_epochs)
+    # use_2d_loss = (epoch >= warmup_epochs)
+    use_2d_loss = False
     effective_lambda_2d = get_2d_weight(epoch, warmup_epochs, lambda_2d) if use_2d_loss else 0.0
 
     # timers for each thing (data / forward / backward / total)
