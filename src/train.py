@@ -142,7 +142,7 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0,
 
     # disable 2D loss during warmup
     # use_2d_loss = (epoch >= warmup_epochs)
-    use_2d_loss = True
+    use_2d_loss = False
     effective_lambda_2d = lambda_2d if use_2d_loss else 0.0
 
     # timers for each thing (data / forward / backward / total)
@@ -261,7 +261,7 @@ def evaluate(model, loader, device, lambda_2d: float = 1.0,
     # Disable 2D loss during warmup
     # use_2d_loss = (epoch >= warmup_epochs)
     # training only with 3d loss
-    use_2d_loss = True
+    use_2d_loss = False
     effective_lambda_2d = lambda_2d if use_2d_loss else 0.0
 
     # timing for evaluation
