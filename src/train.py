@@ -94,40 +94,6 @@ def project_with_K_torch(P_cam, K, eps=1e-6):
     return uv
 
 
-def _pixels_to_normalized(j2d_pix: torch.Tensor, K: torch.Tensor) -> torch.Tensor:
-    fx = K[..., 0, 0]
-    fy = K[..., 1, 1]
-    cx = K[..., 0, 2]
-    cy = K[..., 1, 2]
-
-    if K.dim() == 2:
-        fx = fx.view(1, 1, 1)
-        fy = fy.view(1, 1, 1)
-        cx = cx.view(1, 1, 1)
-        cy = cy.view(1, 1, 1)
-    elif K.dim() == 3:
-        fx = fx[:, None, None]
-        fy = fy[:, None, None]
-        cx = cx[:, None, None]
-        cy = cy[:, None, None]
-    elif K.dim() == 4:
-        fx = fx[:, :, None]
-        fy = fy[:, :, None]
-        cx = cx[:, :, None]
-        cy = cy[:, :, None]
-    else:
-        raise ValueError(f"Unexpected K shape: {tuple(K.shape)}")
-
-    x = (j2d_pix[..., 0] - cx) / fx
-    y = (j2d_pix[..., 1] - cy) / fy
-    return torch.stack([x, y], dim=-1)
-
-
-def _project_normalized(P_cam: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    z = P_cam[..., 2:3].clamp(min=eps)
-    return P_cam[..., 0:2] / z
-
-
 
 def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0, 
           epoch: int = 0, warmup_epochs: int = 5, log_every: int = 500):
@@ -141,9 +107,8 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0,
     n_batches = 0
 
     # disable 2D loss during warmup
-    # use_2d_loss = (epoch >= warmup_epochs)
-    use_2d_loss = False
-    effective_lambda_2d = lambda_2d if use_2d_loss else 0.0
+    use_2d_loss = (epoch >= warmup_epochs)
+    effective_lambda_2d = get_2d_weight(epoch, warmup_epochs, lambda_2d) if use_2d_loss else 0.0
 
     # timers for each thing (data / forward / backward / total)
     timers = defaultdict(float)
@@ -184,9 +149,8 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1.0,
 
             # 2D reprojection loss (only after warmup)
             if use_2d_loss:
-                proj2d = _project_normalized(joints_pred, eps=1e-6)  # (B,T,J,2)
-                joints2d_n = _pixels_to_normalized(joints2d, K)      # (B,T,J,2)
-                l2d = (proj2d - joints2d_n).pow(2).mean()
+                proj2d = project_with_K_torch(joints_pred, K, eps=1e-6)  # (B,T,J,2)
+                l2d = (proj2d - joints2d).pow(2).mean()
             else:
                 l2d = torch.tensor(0.0, device=device)
 
@@ -259,9 +223,7 @@ def evaluate(model, loader, device, lambda_2d: float = 1.0,
     n_batches = 0
 
     # Disable 2D loss during warmup
-    # use_2d_loss = (epoch >= warmup_epochs)
-    # training only with 3d loss
-    use_2d_loss = False
+    use_2d_loss = (epoch >= warmup_epochs)
     effective_lambda_2d = lambda_2d if use_2d_loss else 0.0
 
     # timing for evaluation
@@ -289,9 +251,8 @@ def evaluate(model, loader, device, lambda_2d: float = 1.0,
         l3d = (joints_pred - joints3d).pow(2).mean()
         
         if use_2d_loss:
-            proj2d = _project_normalized(joints_pred, eps=1e-6)
-            joints2d_n = _pixels_to_normalized(joints2d, K)
-            l2d = (proj2d - joints2d_n).pow(2).mean()
+            proj2d = project_with_K_torch(joints_pred, K, eps=1e-6)
+            l2d = (proj2d - joints2d).pow(2).mean()
         else:
             l2d = torch.tensor(0.0, device=device)
 
@@ -358,6 +319,9 @@ def main():
     os.makedirs(args.outdir, exist_ok=True)
 
     effective_batch_size = args.batch_size
+    
+    # to train with 3d only
+    args.warmup_epochs = args.epochs
     if use_multi_gpu:
         # each GPU gets batch_size / num_gpus samples
         per_gpu_batch_size = args.batch_size // num_gpus
@@ -442,17 +406,16 @@ def main():
     print(f"Device: {device}")
     print(f"Train clips: {len(train_set)} | Val clips: {len(val_set)}")
     print(f"Seq len: {args.seq_len} | Batch size: {args.batch_size} | LR: {args.lr}")
-    # print(f"Lambda 2D: {args.lambda_2d} (active after epoch {args.warmup_epochs})")
-    # print(f"Warmup: {args.warmup_epochs} epochs (3D loss only)")
+    print(f"Lambda 2D: {args.lambda_2d} (active after epoch {args.warmup_epochs})")
+    print(f"Warmup: {args.warmup_epochs} epochs (3D loss only)")
     print("============================")
 
     for epoch in range(start_epoch, args.epochs):
         print(f"\nEpoch {epoch+1}/{args.epochs}")
-        # if epoch < args.warmup_epochs:
-        #     print(f"[WARMUP {epoch+1}/{args.warmup_epochs}] Training with 3D loss only")
-        # else:
-        #     print(f"[FULL TRAINING] Using 3D + 2D loss (lambda_2d={args.lambda_2d})")
-        print("Training with 3D loss only")
+        if epoch < args.warmup_epochs:
+            print(f"[WARMUP {epoch+1}/{args.warmup_epochs}] Training with 3D loss only")
+        else:
+            print(f"[FULL TRAINING] Using 3D + 2D loss (lambda_2d={args.lambda_2d})")
         
         t_epoch = time.time()
 
@@ -470,8 +433,7 @@ def main():
             warmup_epochs=args.warmup_epochs
         )
 
-        # effective_lambda_display = args.lambda_2d if epoch >= args.warmup_epochs else 0.0
-        effective_lambda_display = 0.0
+        effective_lambda_display = args.lambda_2d if epoch >= args.warmup_epochs else 0.0
         print(f"Train: loss={tr_loss:.6f} | mpjpe={tr_mpjpe:.3f}")
         print(f"Val:   loss={va_loss:.6f} (3d {va_l3d:.6f} + {effective_lambda_display:.3g}*2d {va_l2d:.6f}) | mpjpe={va_mpjpe:.3f}")
         print(f"Epoch time: {time.time() - t_epoch:.2f}s")
