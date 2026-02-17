@@ -125,7 +125,7 @@ def _predict_one_batch(model: torch.nn.Module, batch, device: torch.device):
 
     feats = feats.to(device).float()
     j3d_pred = model.forward(feats, predict_future=False)[2]  # (B,T,J,3)
-    return joints3d_gt, j3d_pred.detach().cpu(), meta
+    return joints3d_gt, joints2d, K,  j3d_pred.detach().cpu(), meta
 
 
 def _safe_device(prefer: str) -> torch.device:
@@ -170,6 +170,7 @@ def main():
     )
 
     # --------- Load model (with ECC fallback) ----------
+    # ATTENTION!!!!! LAST TRAINING MADE YESTERDAY(09/02 AT 23:30) SAVED IN RUNS/PHASE1.
     try:
         model = PHD(joints_num=JOINTS_NUM).to(device)
     except RuntimeError as e:
@@ -194,7 +195,7 @@ def main():
 
     # --------- Dump ONE BATCH ----------
     batch = next(iter(test_loader))
-    joints3d_gt, joints3d_pred, meta = _predict_one_batch(model, batch, device)
+    joints3d_gt, joints2d, K, joints3d_pred, meta = _predict_one_batch(model, batch, device)
 
     if meta is None:
         raise RuntimeError("Meta is None. Ensure dataset_features returns meta when test_set=True.")
@@ -204,6 +205,8 @@ def main():
 
     joints3d_gt_np = joints3d_gt[:B].detach().cpu().numpy()      # (B,T,J,3)
     joints3d_pred_np = joints3d_pred[:B].detach().cpu().numpy()  # (B,T,J,3)
+    joints2d_np = joints2d[:B].detach().cpu().numpy()          # (B,T,J,2)
+    K_np = K[:B].detach().cpu().numpy()                          # (B,3,3)
 
     videos = []
     metas_payload = []
@@ -226,6 +229,8 @@ def main():
         video=videos_np,
         joints3d=joints3d_gt_np,
         predicted3djoints=joints3d_pred_np,
+        joints2d=joints2d_np,
+        K=K_np,
         meta=np.array(metas_payload, dtype=object),
         test_metrics=np.array([avg_loss, avg_mpjpe, avg_l3d, avg_l2d], dtype=np.float32),
     )
