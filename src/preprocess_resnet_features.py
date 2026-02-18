@@ -152,7 +152,7 @@ def main():
     print("-" * 60)
 
     for it, batch in enumerate(loader):
-        video, joints3d, joints2d, K = batch
+        video, joints3d, joints2d, K, box = batch
         B, T, C, H, W = video.shape
 
         video = video.to(device, non_blocking=True)
@@ -193,7 +193,7 @@ def main():
                     "cam": clip.cam,
                     "start": clip.start,
                     "end": clip.end,
-                    "box": clip.box,
+                    "box": box[b].cpu() if box is not None else None,
                     "seq_len": args.seq_len,
                     "frame_skip": args.frame_skip,
                 }

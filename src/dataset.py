@@ -34,7 +34,6 @@ class ClipIndex:
     cam_params: dict
     start: int
     end: int  # exclusive
-    box: Optional[torch.Tensor] = None  # (top, left, height, width)
     video_idx: int = 0
 
 
@@ -321,7 +320,6 @@ class Human36MPreprocessedClips(Dataset):
             img_w=W,
             scale=self.crop_scale,
         )
-        ci.box = box  # save the box in the ClipIndex for potential later use
 
         # compute crop on video frames, adjust joints2d and camera intrinsics accordingly
         video = _crop_and_resize_video_uint8(frames_uint8, box, out_size=self.resize)
@@ -337,4 +335,4 @@ class Human36MPreprocessedClips(Dataset):
         # joints3d (T,17,3), 
         # joints2d (T,17,2), 
         # K (3,3)
-        return video, joints3d, joints2d, K
+        return video, joints3d, joints2d, K, box
