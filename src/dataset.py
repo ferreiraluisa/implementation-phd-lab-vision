@@ -32,10 +32,10 @@ class ClipIndex:
     action: str
     cam: str
     cam_params: dict
-    box: Optional[torch.Tensor] = None  # (top, left, height, width) of the crop box, computed from 2D joints
     start: int
     end: int  # exclusive
-    video_idx: int = 0  # group clips by video
+    box: Optional[torch.Tensor] = None  # (top, left, height, width)
+    video_idx: int = 0
 
 
 def _load_poses(gt_path): 
