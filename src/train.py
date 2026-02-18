@@ -226,7 +226,7 @@ def evaluate(model, loader, device, lambda_2d: float = 1e-6):
 
         l3d = (joints_pred - joints3d).pow(2).mean()
         proj2d = project_with_K_torch(joints_pred, K, eps=1e-6)
-        l2d = (proj2d - joints2d).pow(2).mean()
+        l2d = torch.norm(proj2d - joints2d, dim=-1).mean()
 
         loss = l3d + (lambda_2d * l2d)
 
