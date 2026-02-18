@@ -193,6 +193,7 @@ def main():
                     "cam": clip.cam,
                     "start": clip.start,
                     "end": clip.end,
+                    "box": clip.box,
                     "seq_len": args.seq_len,
                     "frame_skip": args.frame_skip,
                 }

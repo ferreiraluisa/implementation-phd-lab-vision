@@ -24,7 +24,7 @@ K: (3,3) camera intrinsics adjusted for the cropped/resized frames
 
 Coded by Luisa Ferreira, 2026.
 """
-@dataclass
+@dataclass # used for creating simple classes to hold clip metadata, like video path, gt path, subject, action, cam, start/end frames, etc, without needing to write boilerplate code for init, repr, etc.
 class ClipIndex:
     video_path: str
     gt_path: str
@@ -32,6 +32,7 @@ class ClipIndex:
     action: str
     cam: str
     cam_params: dict
+    box: Optional[torch.Tensor] = None  # (top, left, height, width) of the crop box, computed from 2D joints
     start: int
     end: int  # exclusive
     video_idx: int = 0  # group clips by video
@@ -320,11 +321,13 @@ class Human36MPreprocessedClips(Dataset):
             img_w=W,
             scale=self.crop_scale,
         )
+        ci.box = box  # save the box in the ClipIndex for potential later use
 
         # compute crop on video frames, adjust joints2d and camera intrinsics accordingly
         video = _crop_and_resize_video_uint8(frames_uint8, box, out_size=self.resize)
         joints2d = _adjust_joints2d_after_crop_and_resize(joints2d=joints2d, box=box, out_size=self.resize)
         K = _adjust_camera_after_crop_and_resize(ci.cam_params, box=box, out_size=self.resize)
+
 
         # normalize video for ResNet
         video = self.frame_tf(video)
