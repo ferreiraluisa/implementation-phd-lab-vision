@@ -92,7 +92,7 @@ class JointRegressor(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(1024, 1024),
             nn.ReLU(inplace=True),
-            nn.Dropout(dropout),          # 19/02 added DROPOUT LAYER
+            # nn.Dropout(dropout),          # 19/02 added DROPOUT LAYER, and remove it 19/02
             nn.Linear(1024, self.out_dim),
         )
 
