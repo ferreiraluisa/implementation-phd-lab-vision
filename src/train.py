@@ -134,11 +134,7 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1e-6, log_eve
             # 3D loss
             l3d = (joints_pred - joints3d).pow(2).mean()
 
-            # 2D reprojection loss
-            proj2d = project_with_K_torch(joints_pred, K, eps=1e-6)  # (B,T,J,2)
-            l2d = (proj2d - joints2d).pow(2).mean()
-
-            loss = l3d + (lambda_2d * l2d)
+            loss = l3d 
 
         timers["forward+loss"] += (time.time() - t_fwd)
 
@@ -173,7 +169,7 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1e-6, log_eve
         if log_every > 0 and (it + 1) % log_every == 0:
             dt_epoch = time.time() - epoch_start
             print(
-                f"[3D+2D]  iter {it+1:05d}/{len(loader):05d} | "
+                f"[3D only]  iter {it+1:05d}/{len(loader):05d} | "
                 f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f} + "
                 f"{lambda_2d:.3g}*2d {running_l2d/n_batches:.6f}) | "
                 f"mpjpe {running_mpjpe/n_batches:.3f} | "
