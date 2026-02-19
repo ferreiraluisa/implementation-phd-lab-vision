@@ -158,7 +158,6 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1e-6, log_eve
         # --------------------
         running_loss += float(loss.item())
         running_l3d += float(l3d.item())
-        running_l2d += float(l2d.item())
         running_mpjpe += mpjpe_mm(joints_pred.detach(), joints3d.detach())
         n_batches += 1
 
@@ -170,8 +169,7 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1e-6, log_eve
             dt_epoch = time.time() - epoch_start
             print(
                 f"[3D only]  iter {it+1:05d}/{len(loader):05d} | "
-                f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f} + "
-                f"{lambda_2d:.3g}*2d {running_l2d/n_batches:.6f}) | "
+                f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f}) | "
                 f"mpjpe {running_mpjpe/n_batches:.3f} | "
                 f"time/iter {timers['iter']/n_batches:.4f}s | "
                 f"epoch {dt_epoch:.1f}s"
@@ -221,14 +219,11 @@ def evaluate(model, loader, device, lambda_2d: float = 1e-6):
         timers["forward"] += (time.time() - t_fwd)
 
         l3d = (joints_pred - joints3d).pow(2).mean()
-        proj2d = project_with_K_torch(joints_pred, K, eps=1e-6)
-        l2d = (proj2d - joints2d).pow(2).mean()
 
-        loss = l3d + (lambda_2d * l2d)
+        loss = l3d
 
         total_loss += float(loss.item())
         total_l3d += float(l3d.item())
-        total_l2d += float(l2d.item())
         total_mpjpe += mpjpe_mm(joints_pred, joints3d)
         n_batches += 1
 
@@ -248,7 +243,7 @@ def evaluate(model, loader, device, lambda_2d: float = 1e-6):
         total_loss / max(n_batches, 1),
         total_mpjpe / max(n_batches, 1),
         total_l3d / max(n_batches, 1),
-        total_l2d / max(n_batches, 1),
+        0.0,  # total_l2d / max(n_batches, 1), since we're not computing it anymore
     )
 
 
