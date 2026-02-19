@@ -25,12 +25,36 @@ from model import PHDFor3DJoints as PHD
 # Metrics / Losses
 # -----------------------------
 
+H36M_EDGES = [
+    (0,1),(1,2),(2,3),
+    (0,4),(4,5),(5,6),
+    (0,7),(7,8),(8,9),(9,10),
+    (8,11),(11,12),(12,13),
+    (8,14),(14,15),(15,16),
+]
+
+# Pre-build edge index tensors once at module load time (moved to device inside each loss)
+_EDGE_SRC = torch.tensor([e[0] for e in H36M_EDGES], dtype=torch.long)  # (E,)
+_EDGE_DST = torch.tensor([e[1] for e in H36M_EDGES], dtype=torch.long)  # (E,)
+
 # Mean Per Joint Position Error (same units as your joints3d; often mm in H36M pipelines)
 # pred, gt: (B,T,J,3)
 @torch.no_grad()
-def mpjpe_mm(pred: torch.Tensor, gt: torch.Tensor) -> float:
+def mpjpe_m(pred: torch.Tensor, gt: torch.Tensor) -> float:
     err = torch.norm(pred - gt, dim=-1)  # (B,T,J)
     return float(err.mean().item())
+
+# Bone length loss: encourage predicted bone lengths to match GT at every timestep.
+# pred, gt: (B,T,J,3)
+def bone_length_loss(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+    src = _EDGE_SRC.to(pred.device)
+    dst = _EDGE_DST.to(pred.device)
+    pred_bones = pred[:, :, dst] - pred[:, :, src]   # (B,T,E,3)
+    gt_bones   = gt[:, :, dst]   - gt[:, :, src]     # (B,T,E,3)
+    pred_len = torch.norm(pred_bones, dim=-1)          # (B,T,E)
+    gt_len   = torch.norm(gt_bones,   dim=-1)          # (B,T,E)
+    return F.mse_loss(pred_len, gt_len)
+
 
 
 def save_checkpoint(path: str, model: nn.Module, optim: torch.optim.Optimizer,
@@ -86,13 +110,14 @@ def project_with_K_torch(P_cam, K, eps=1e-6):
 
 
 
-def train(model, loader, optim, scaler, device, lambda_2d: float = 1e-6, log_every: int = 500):
+def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bone: float = 1, log_every: int = 500):
     model.train()
     epoch_start = time.time()
 
     running_loss = 0.0
     running_l3d = 0.0
-    running_l2d = 0.0
+    running_lvel = 0.0
+    running_lbone = 0.0
     running_mpjpe = 0.0
     n_batches = 0
 
@@ -133,8 +158,10 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1e-6, log_eve
 
             # 3D loss
             l3d = (joints_pred - joints3d).pow(2).mean()
+            # Bone length loss: encourage consistent limb lengths across time
+            lbone = bone_length_loss(joints_pred, joints3d)
 
-            loss = l3d 
+            loss = l3d + lambda_bone * lbone
 
         timers["forward+loss"] += (time.time() - t_fwd)
 
@@ -158,7 +185,8 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1e-6, log_eve
         # --------------------
         running_loss += float(loss.item())
         running_l3d += float(l3d.item())
-        running_mpjpe += mpjpe_mm(joints_pred.detach(), joints3d.detach())
+        running_lbone += float(lbone.item())
+        running_mpjpe += mpjpe_m(joints_pred.detach(), joints3d.detach())
         n_batches += 1
 
         t_iter_end = time.time()
@@ -168,8 +196,8 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1e-6, log_eve
         if log_every > 0 and (it + 1) % log_every == 0:
             dt_epoch = time.time() - epoch_start
             print(
-                f"[3D only]  iter {it+1:05d}/{len(loader):05d} | "
-                f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f}) | "
+                f"[3D+bone length]  iter {it+1:05d}/{len(loader):05d} | "
+                f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f}, bone {running_lbone/n_batches:.6f}) | "
                 f"mpjpe {running_mpjpe/n_batches:.3f} | "
                 f"time/iter {timers['iter']/n_batches:.4f}s | "
                 f"epoch {dt_epoch:.1f}s"
@@ -189,21 +217,19 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1e-6, log_eve
 
 
 @torch.no_grad()
-def evaluate(model, loader, device, lambda_2d: float = 1.0, 
-             epoch: int = 0, warmup_epochs: int = 5, test_set: bool = False):
+def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float = 1.0, test_set: bool = False):
     model.eval()
 
     total_loss = 0.0
     total_l3d = 0.0
-    total_l2d = 0.0
+    total_lvel = 0.0
+    total_lbone = 0.0
     total_mpjpe = 0.0
     n_batches = 0
 
     # Disable 2D loss during warmup
     # use_2d_loss = (epoch >= warmup_epochs)
     # training only with 3d loss
-    use_2d_loss = True
-    effective_lambda_2d = lambda_2d if use_2d_loss else 0.0
 
     # timing for evaluation
     t_eval_start = time.time()
@@ -228,12 +254,14 @@ def evaluate(model, loader, device, lambda_2d: float = 1.0,
         timers["forward"] += (time.time() - t_fwd)
 
         l3d = (joints_pred - joints3d).pow(2).mean()
+        lbone = bone_length_loss(joints_pred, joints3d)
 
-        loss = l3d 
+        loss = l3d + lambda_bone * lbone
 
         total_loss += float(loss.item())
         total_l3d += float(l3d.item())
-        total_mpjpe += mpjpe_mm(joints_pred, joints3d)
+        total_lbone += float(lbone.item())
+        total_mpjpe += mpjpe_m(joints_pred, joints3d)
         n_batches += 1
 
         t_iter_end = time.time()
@@ -383,12 +411,10 @@ def main():
 
         tr_loss, tr_mpjpe = train(
             model, train_loader, optim, scaler, device,
-            lambda_2d=args.lambda_2d,
             log_every=args.log_every
         )
         va_loss, va_mpjpe, va_l3d, va_l2d = evaluate(
-            model, val_loader, device,
-            lambda_2d=args.lambda_2d
+            model, val_loader, device
         )
 
         scheduler.step()
