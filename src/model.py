@@ -143,7 +143,7 @@ class PHDFor3DJoints(nn.Module):
         self.f_AR = CausalTemporalNet(latent_dim)
         self.f_3D = JointRegressor(latent_dim, joints_num)
         # reduce model capacity
-        self.input_proj = nn.Linear(latent_dim, 512)
+        self.input_proj = nn.Linear(2048, latent_dim)
 
     # @torch.no_grad() # resnet must not be trained
     # def extract_features(self, video):
