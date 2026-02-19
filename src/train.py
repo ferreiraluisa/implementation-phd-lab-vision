@@ -301,12 +301,10 @@ def main():
     train_set = Human36MFeatureClips(
         root=args.root,
         subjects=[1, 6, 7, 8],
-        max_clips=args.max_train_clips,
     )
     val_set = Human36MFeatureClips(
         root=args.root,
         subjects=[5],
-        max_clips=args.max_val_clips,
     )
 
     # DataLoader optimizations
