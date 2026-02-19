@@ -189,7 +189,8 @@ def train(model, loader, optim, scaler, device, lambda_2d: float = 1e-6, log_eve
 
 
 @torch.no_grad()
-def evaluate(model, loader, device, lambda_2d: float = 1e-6):
+def evaluate(model, loader, device, lambda_2d: float = 1.0, 
+             epoch: int = 0, warmup_epochs: int = 5, test_set: bool = False):
     model.eval()
 
     total_loss = 0.0
@@ -197,6 +198,12 @@ def evaluate(model, loader, device, lambda_2d: float = 1e-6):
     total_l2d = 0.0
     total_mpjpe = 0.0
     n_batches = 0
+
+    # Disable 2D loss during warmup
+    # use_2d_loss = (epoch >= warmup_epochs)
+    # training only with 3d loss
+    use_2d_loss = True
+    effective_lambda_2d = lambda_2d if use_2d_loss else 0.0
 
     # timing for evaluation
     t_eval_start = time.time()
@@ -206,8 +213,10 @@ def evaluate(model, loader, device, lambda_2d: float = 1e-6):
     for batch in loader:
         t_iter_start = time.time()
         timers["data"] += (t_iter_start - end_data)
-
-        feats, joints3d, joints2d, K = batch
+        if test_set:
+            feats, joints3d, joints2d, K, meta = batch
+        else:
+            feats, joints3d, joints2d, K = batch
 
         feats = feats.to(device, non_blocking=True)         # (B,T,2048)
         joints3d = joints3d.to(device, non_blocking=True)   # (B,T,J,3)
@@ -220,7 +229,7 @@ def evaluate(model, loader, device, lambda_2d: float = 1e-6):
 
         l3d = (joints_pred - joints3d).pow(2).mean()
 
-        loss = l3d
+        loss = l3d 
 
         total_loss += float(loss.item())
         total_l3d += float(l3d.item())
@@ -243,7 +252,7 @@ def evaluate(model, loader, device, lambda_2d: float = 1e-6):
         total_loss / max(n_batches, 1),
         total_mpjpe / max(n_batches, 1),
         total_l3d / max(n_batches, 1),
-        0.0,  # total_l2d / max(n_batches, 1), since we're not computing it anymore
+        0.0,  # total_l2d / max(n_batches, 1), since we're not using 2D loss in this version
     )
 
 
