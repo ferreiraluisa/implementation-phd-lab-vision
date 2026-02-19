@@ -263,15 +263,15 @@ def main():
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--lr", type=float, default=LR)
     parser.add_argument("--epochs", type=int, default=EPOCHS)
-    parser.add_argument("--frame_skip", type=int, default=FRAME_SKIP, help="frame subsampling rate during video loading")
     parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--stride", type=int, default=5, help="clip sampling stride in frames (dataset indexing)")
-    parser.add_argument("--max-train-clips", type=int, default=None)
-    parser.add_argument("--max-val-clips", type=int, default=None)
     parser.add_argument("--lambda-2d", type=float, default=1e-6, help="2D reprojection loss weight")
     parser.add_argument("--outdir", type=str, default="./runs/phase1")
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--log-every", type=int, default=500)
+    parser.add_argument("--early-stop-patience", type=int, default=10,
+                    help="Stop if val MPJPE doesn't improve for this many epochs (0 disables).")
+    parser.add_argument("--early-stop-min-delta", type=float, default=0.0,
+                    help="Minimum MPJPE improvement to reset patience.")
     args = parser.parse_args()
 
     # set device and multi-GPU
@@ -358,6 +358,7 @@ def main():
 
     start_epoch = 0
     best_val = float("inf")
+    no_improve_epochs = 0
 
     if args.resume and os.path.isfile(args.resume):
         ckpt = torch.load(args.resume, map_location="cpu")
@@ -403,13 +404,24 @@ def main():
             model, optim, epoch, best_val, args
         )
 
-        if va_mpjpe < best_val:
+        improved = (best_val - va_mpjpe) > args.early_stop_min_delta
+
+        if improved:
             best_val = va_mpjpe
+            no_improve_epochs = 0
             save_checkpoint(
                 os.path.join(args.outdir, "best.pt"),
                 model, optim, epoch, best_val, args
             )
             print(f"New best val MPJPE: {best_val:.3f} (saved best.pt)")
+        else:
+            no_improve_epochs += 1
+            print(f"No improvement for {no_improve_epochs}/{args.early_stop_patience} epochs "
+                f"(best {best_val:.3f}, current {va_mpjpe:.3f})")
+
+        if args.early_stop_patience > 0 and no_improve_epochs >= args.early_stop_patience:
+            print(f"Early stopping triggered at epoch {epoch+1}. Best val MPJPE: {best_val:.3f}")
+            break
 
     print("\nDone.")
     print(f"Best val MPJPE: {best_val:.3f}")
