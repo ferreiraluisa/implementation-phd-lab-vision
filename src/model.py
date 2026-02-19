@@ -34,14 +34,13 @@ class CausalConv1d(nn.Module):
 
 class ResidualBlock(nn.Module):
     # group norm + relu + causal conv1d + group norm + relu + causal conv1d + skip connection
-    def __init__(self, channels, groups=32, drop_path_rate=0.1):
+    def __init__(self, channels, groups=32):
         super().__init__()
         self.gn1 = nn.GroupNorm(groups, channels)
         self.relu = nn.ReLU(inplace=True)
         self.conv1 = CausalConv1d(channels, channels, kernel_size=3)
         self.gn2 = nn.GroupNorm(groups, channels)
         self.conv2 = CausalConv1d(channels, channels, kernel_size=3)
-        self.drop_path_rate = drop_path_rate
 
     def forward(self, x):
         residual = x
@@ -52,12 +51,6 @@ class ResidualBlock(nn.Module):
         x = self.relu(x)
         x = self.conv2(x)
 
-        # 19/02 tochastic depth: randomly drop the whole residual branch during training
-        # improves generalization and training speed
-        if self.training and self.drop_path_rate > 0.0:
-            keep_prob = 1.0 - self.drop_path_rate
-            mask = torch.rand(x.shape[0], 1, 1, device=x.device) < keep_prob
-            x = x * mask / keep_prob
         return x + residual
 
 
