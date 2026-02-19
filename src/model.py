@@ -34,13 +34,14 @@ class CausalConv1d(nn.Module):
 
 class ResidualBlock(nn.Module):
     # group norm + relu + causal conv1d + group norm + relu + causal conv1d + skip connection
-    def __init__(self, channels, groups=32):
+    def __init__(self, channels, groups=32, drop_path_rate=0.1):
         super().__init__()
         self.gn1 = nn.GroupNorm(groups, channels)
         self.relu = nn.ReLU(inplace=True)
         self.conv1 = CausalConv1d(channels, channels, kernel_size=3)
         self.gn2 = nn.GroupNorm(groups, channels)
         self.conv2 = CausalConv1d(channels, channels, kernel_size=3)
+        self.drop_path_rate = drop_path_rate
 
     def forward(self, x):
         residual = x
@@ -50,6 +51,13 @@ class ResidualBlock(nn.Module):
         x = self.gn2(x)
         x = self.relu(x)
         x = self.conv2(x)
+
+        # 19/02 tochastic depth: randomly drop the whole residual branch during training
+        # improves generalization and training speed
+        if self.training and self.drop_path_rate > 0.0:
+            keep_prob = 1.0 - self.drop_path_rate
+            mask = torch.rand(x.shape[0], 1, 1, device=x.device) < keep_prob
+            x = x * mask / keep_prob
         return x + residual
 
 
@@ -92,6 +100,7 @@ class JointRegressor(nn.Module):
             nn.Linear(1024, 1024),
             nn.ReLU(inplace=True),
             nn.Linear(1024, self.out_dim),
+            nn.Dropout(dropout),          # 19/02 added DROPOUT LAYER
         )
 
         # initial pose (all zeros)
@@ -121,7 +130,7 @@ class JointRegressor(nn.Module):
 # third, the autoregressive predictor fAR predicts the next latent movie strip based on previous ones
 # finally, the joint regressor f3D takes both the latent movie strips and the predicted ones to output the 3D joint positions.
 class PHDFor3DJoints(nn.Module):
-    def __init__(self, latent_dim=2048, joints_num=17, freeze_backbone=True):
+    def __init__(self, latent_dim=2048, joints_num=17):
         super().__init__()
 
         # ----------------------------------------------------
@@ -132,9 +141,6 @@ class PHDFor3DJoints(nn.Module):
         # self.backbone = nn.Sequential(*list(resnet.children())[:-1])
         # commented out bc we don't want to extract features here, only in preprocess_resnet_features.py
 
-        # if freeze_backbone:
-        #     for p in self.backbone.parameters():
-        #         p.requires_grad = False
 
         self.latent_dim = latent_dim
 
