@@ -139,7 +139,7 @@ class PHDFor3DJoints(nn.Module):
 
         self.latent_dim = latent_dim
 
-        self.f_movie = CausalTemporalNet(latent_dim, number_blocks=number_blocks)
+        self.f_movie = CausalTemporalNet(latent_dim, num_blocks=number_blocks)
         self.f_AR = CausalTemporalNet(latent_dim)
         self.f_3D = JointRegressor(latent_dim, joints_num)
         # reduce model capacity
