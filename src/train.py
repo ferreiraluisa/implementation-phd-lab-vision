@@ -159,9 +159,8 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
             # 3D loss
             l3d = (joints_pred - joints3d).pow(2).mean()
             # Bone length loss: encourage consistent limb lengths across time
-            lbone = bone_length_loss(joints_pred, joints3d)
 
-            loss = l3d + lambda_bone * lbone
+            loss = l3d
 
         timers["forward+loss"] += (time.time() - t_fwd)
 
@@ -185,7 +184,6 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
         # --------------------
         running_loss += float(loss.item())
         running_l3d += float(l3d.item())
-        running_lbone += float(lbone.item())
         running_mpjpe += mpjpe_m(joints_pred.detach(), joints3d.detach())
         n_batches += 1
 
@@ -196,8 +194,8 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
         if log_every > 0 and (it + 1) % log_every == 0:
             dt_epoch = time.time() - epoch_start
             print(
-                f"[3D+bone length]  iter {it+1:05d}/{len(loader):05d} | "
-                f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f}, bone {running_lbone/n_batches:.6f}) | "
+                f"[3D]  iter {it+1:05d}/{len(loader):05d} | "
+                f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f}) | "
                 f"mpjpe {running_mpjpe/n_batches:.3f} | "
                 f"time/iter {timers['iter']/n_batches:.4f}s | "
                 f"epoch {dt_epoch:.1f}s"
@@ -222,8 +220,6 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
 
     total_loss = 0.0
     total_l3d = 0.0
-    total_lvel = 0.0
-    total_lbone = 0.0
     total_mpjpe = 0.0
     n_batches = 0
 
@@ -254,13 +250,11 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
         timers["forward"] += (time.time() - t_fwd)
 
         l3d = (joints_pred - joints3d).pow(2).mean()
-        lbone = bone_length_loss(joints_pred, joints3d)
 
-        loss = l3d + lambda_bone * lbone
+        loss = l3d 
 
         total_loss += float(loss.item())
         total_l3d += float(l3d.item())
-        total_lbone += float(lbone.item())
         total_mpjpe += mpjpe_m(joints_pred, joints3d)
         n_batches += 1
 
@@ -357,7 +351,7 @@ def main():
         drop_last=False,
     )
 
-    model = PHD(latent_dim=512, joints_num=JOINTS_NUM)
+    model = PHD(latent_dim=1024, joints_num=JOINTS_NUM, number_blocks=2)
 
     # ----------------------------------
     # TRAINING PHASE 1 : freeze ResNet, train f_movie + f_3D

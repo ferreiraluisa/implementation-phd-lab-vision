@@ -125,7 +125,7 @@ class JointRegressor(nn.Module):
 # third, the autoregressive predictor fAR predicts the next latent movie strip based on previous ones
 # finally, the joint regressor f3D takes both the latent movie strips and the predicted ones to output the 3D joint positions.
 class PHDFor3DJoints(nn.Module):
-    def __init__(self, latent_dim=2048, joints_num=17):
+    def __init__(self, latent_dim=2048, joints_num=17, number_blocks=3):
         super().__init__()
 
         # ----------------------------------------------------
@@ -139,7 +139,7 @@ class PHDFor3DJoints(nn.Module):
 
         self.latent_dim = latent_dim
 
-        self.f_movie = CausalTemporalNet(latent_dim)
+        self.f_movie = CausalTemporalNet(latent_dim, number_blocks=number_blocks)
         self.f_AR = CausalTemporalNet(latent_dim)
         self.f_3D = JointRegressor(latent_dim, joints_num)
         # reduce model capacity
