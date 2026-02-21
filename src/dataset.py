@@ -412,8 +412,8 @@ class Human36MPreprocessedClips(Dataset):
             variants = []
             variants.append((self.frame_tf(video), joints2d, joints3d, K))  # original (unaugmented) clip is always included as a variant
             # 1. Color jitter — purely photometric, no joint adjustment needed
-            video_aux, j2d_aux, j3d_aux, K_aux = _aug_color_jitter(video), joints2d, joints3d, K
-            variants.append((self.frame_tf(video_aux), j2d_aux, j3d_aux, K_aux))
+            video_aux = _aug_color_jitter(video)
+            variants.append((self.frame_tf(video_aux), joints2d, joints3d, K))
 
             # 2. Horizontal flip — mirrors video + joints2d/3d + K
             video_aux, j2d_aux, j3d_aux, K_aux = _aug_hflip(video, joints2d, joints3d, K)
