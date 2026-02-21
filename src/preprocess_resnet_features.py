@@ -67,6 +67,7 @@ def main():
     parser.add_argument("--subjects", type=int, nargs="+", default=[1, 5, 6, 7, 8, 9, 11])
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--save-fp16", action="store_true", help="Store feats as float16")
+    parser.add_argument("--augment", action="store_true", help="Disable async file writing (for debugging)")
     args = parser.parse_args()
 
     if args.device.startswith("cuda") and not torch.cuda.is_available():
@@ -94,9 +95,9 @@ def main():
         seq_len=args.seq_len,
         frame_skip=args.frame_skip,
         stride=args.stride,
+        augment=args.augment,  # disable augmentation for non training subject
         max_clips=None,
     )
-
     loader = DataLoader(
         ds,
         batch_size=args.batch_size,
