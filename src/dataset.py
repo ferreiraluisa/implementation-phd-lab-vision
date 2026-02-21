@@ -420,8 +420,8 @@ class Human36MPreprocessedClips(Dataset):
             variants.append((self.frame_tf(video_aux), j2d_aux, j3d_aux, K_aux))
 
             # 3. Temporal reverse — flip clip in time
-            video_aux, j2d_aux, j3d_aux, K_aux = _aug_temporal_reverse(video, joints2d, joints3d, K)
-            variants.append((self.frame_tf(video_aux), j2d_aux, j3d_aux, K_aux))
+            video_aux, j2d_aux, j3d_aux = _aug_temporal_reverse(video, joints2d, joints3d)
+            variants.append((self.frame_tf(video_aux), j2d_aux, j3d_aux))
 
             return variants
 
