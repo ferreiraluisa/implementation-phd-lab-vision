@@ -155,10 +155,10 @@ def _crop_and_resize_video_uint8(frames_uint8, box, out_size=224):
 # Augmentation helpers
 # ---------------------------------------------------------------------------
 
-def _aug_hflip(video, joints2d, joints3d, K, p=0.5):
+def _aug_hflip(video, joints2d, joints3d, K):
     # horizontal flip + fix joints and K
-    if torch.rand(1).item() > p:
-        return video, joints2d, joints3d, K
+    # if torch.rand(1).item() > p:
+    #     return video, joints2d, joints3d, K
 
     W = video.shape[-1]  # 224
 
@@ -185,10 +185,8 @@ def _aug_hflip(video, joints2d, joints3d, K, p=0.5):
     return video, joints2d, joints3d, K
 
 
-def _aug_color_jitter(video, p=0.8):
+def _aug_color_jitter(video):
     # Color jitter can help the model be more robust to variations in lighting and appearance. It randomly changes the brightness, contrast, saturation, and hue of the video frames, which can help prevent overfitting to specific lighting conditions or colors in the training data. This augmentation encourages the model to learn more general features that are invariant to such changes, improving its ability to generalize to new videos with different lighting and color characteristics.
-    if torch.rand(1).item() > p:
-        return video
 
     jitter = T.ColorJitter(
         brightness=0.3,
@@ -200,10 +198,8 @@ def _aug_color_jitter(video, p=0.8):
     return jitter(video)
 
 
-def _aug_temporal_reverse(video, joints2d, joints3d, p=0.3):
+def _aug_temporal_reverse(video, joints2d, joints3d):
     # Reverse the temporal order of the clip, which can help the model learn to predict in both forward and backward time directions, improving its robustness and generalization to different motion patterns. When we reverse the video frames, we also need to reverse the order of the joints2d and joints3d sequences so that they still correspond correctly to each frame.
-    if torch.rand(1).item() > p:
-        return video, joints2d, joints3d
 
     video    = torch.flip(video,    dims=[0])
     joints2d = torch.flip(joints2d, dims=[0])
@@ -224,9 +220,6 @@ class Human36MPreprocessedClips(Dataset):
         crop_scale: float = 1.6,
         max_clips: Optional[int] = None,
         augment: bool = False,
-        aug_hflip_p: float = 0.5,
-        aug_color_jitter_p: float = 0.8,
-        aug_temporal_reverse_p: float = 0.3,
     ):
         """
         Args:
@@ -245,9 +238,6 @@ class Human36MPreprocessedClips(Dataset):
         self.resize = resize
         self.crop_scale = crop_scale
         self.augment = augment
-        self.aug_hflip_p = aug_hflip_p
-        self.aug_color_jitter_p = aug_color_jitter_p
-        self.aug_temporal_reverse_p = aug_temporal_reverse_p
 
         self.frame_tf = T.Compose([
             T.Normalize(mean=(0.485, 0.456, 0.406),
@@ -419,18 +409,21 @@ class Human36MPreprocessedClips(Dataset):
         # Applied BEFORE ImageNet normalization so color jitter sees [0, 1].
         # ---------------------------------------------------------------
         if self.augment:
+            variants = []
+            variants.append((self.frame_tf(video), joints2d, joints3d, K))  # original (unaugmented) clip is always included as a variant
             # 1. Color jitter — purely photometric, no joint adjustment needed
-            video = _aug_color_jitter(video, p=self.aug_color_jitter_p)
+            video_aux, j2d_aux, j3d_aux, K_aux = _aug_color_jitter(video), joints2d, joints3d, K
+            variants.append((self.frame_tf(video_aux), j2d_aux, j3d_aux, K_aux))
 
             # 2. Horizontal flip — mirrors video + joints2d/3d + K
-            video, joints2d, joints3d, K = _aug_hflip(
-                video, joints2d, joints3d, K, p=self.aug_hflip_p
-            )
+            video_aux, j2d_aux, j3d_aux, K_aux = _aug_hflip(video, joints2d, joints3d, K)
+            variants.append((self.frame_tf(video_aux), j2d_aux, j3d_aux, K_aux))
 
             # 3. Temporal reverse — flip clip in time
-            video, joints2d, joints3d = _aug_temporal_reverse(
-                video, joints2d, joints3d, p=self.aug_temporal_reverse_p
-            )
+            video_aux, j2d_aux, j3d_aux, K_aux = _aug_temporal_reverse(video, joints2d, joints3d, K)
+            variants.append((self.frame_tf(video_aux), j2d_aux, j3d_aux, K_aux))
+
+            return variants
 
         # Normalize video for ResNet (ImageNet mean/std)
         video = self.frame_tf(video)
