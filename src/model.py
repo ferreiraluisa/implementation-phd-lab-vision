@@ -39,7 +39,7 @@ class ResidualBlock(nn.Module):
         self.gn1 = nn.GroupNorm(groups, channels)
         self.relu = nn.ReLU(inplace=True)
         self.conv1 = CausalConv1d(channels, channels, kernel_size=3)
-        # self.drop = nn.Dropout(dropout)
+        self.drop = nn.Dropout(dropout)
         self.gn2 = nn.GroupNorm(groups, channels)
         self.conv2 = CausalConv1d(channels, channels, kernel_size=3)
 
@@ -48,7 +48,7 @@ class ResidualBlock(nn.Module):
         x = self.gn1(x)
         x = self.relu(x)
         x = self.conv1(x)
-        # x = self.drop(x)
+        x = self.drop(x)
         x = self.gn2(x)
         x = self.relu(x)
         x = self.conv2(x)
