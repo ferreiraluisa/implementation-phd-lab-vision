@@ -45,14 +45,12 @@ class Human36MFeatureClips(Dataset):
             raise RuntimeError(f"No cached clips found under {root}")
 
         self.files = files
-        # trying to improve data loading speed
-        self._cache = [torch.load(f, map_location="cpu", weights_only=True) for f in self.files]
 
     def __len__(self):
         return len(self.files)
 
     def __getitem__(self, idx: int):
-        d = self._cache[idx]
+        d = torch.load(self.files[idx], map_location="cpu", weights_only=True)
 
         feats = d["feats"]
         joints3d = d["joints3d"] / 1000.0  # mm → m
