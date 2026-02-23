@@ -187,14 +187,15 @@ def main():
     
     print("Warming up compiled model...")
     warmup_batch = next(iter(loader))
-    warmup_video = warmup_batch[0].to(device, non_blocking=True)
+    warmup_video = (warmup_batch[0][0] if args.augment else warmup_batch[0]).to(device, non_blocking=True)
     B, T, C, H, W = warmup_video.shape
-    with torch.autocast(device_type="cuda" if device.startswith("cuda") else "cpu", 
-                        dtype=torch.bfloat16 if device.startswith("cuda") else torch.float32):
+    with torch.autocast(device_type="cuda" if device.startswith("cuda") else "cpu",
+                        dtype=torch.bfloat16 if device.startswith("cuda") else torch.float32,
+                        enabled=device.startswith("cuda")):
         _ = backbone(warmup_video.view(B * T, C, H, W).contiguous())
     if device.startswith("cuda"):
         torch.cuda.synchronize()
-    print("✓ Warmup complete")
+    print("✓ Warmup complete\n")
 
     print(f"\nProcessing {len(ds)} clips...")
     print("-" * 60)
