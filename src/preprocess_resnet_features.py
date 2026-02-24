@@ -85,7 +85,7 @@ def flush_shard(buf, sid, n_vars, out_root, writer):
         "n_vars":   n_vars,
     }
     path = out_root / f"shard_{sid:05d}.pt"
-    writer.write(shard_dict, path)
+    writer.save(shard_dict, path)
     return empty_shard_buffer()
 
 
