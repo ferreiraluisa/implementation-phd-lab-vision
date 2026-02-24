@@ -324,6 +324,7 @@ def main():
     train_set = Human36MFeatureClips(
         root=args.train,
         subjects=[1, 6, 7, 8],
+        augment=True,  # use data augmentation for training
     )
     val_set = Human36MFeatureClips(
         root=args.val,
