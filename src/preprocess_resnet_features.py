@@ -277,7 +277,7 @@ def main():
 
             # Flush when shard is full
             if shard_clips >= args.shard_size:
-                shard_buf = flush_shard(shard_buf, shard_id)
+                shard_buf = flush_shard(shard_buf, shard_id, n_vars, out_root, writer)
                 shard_id   += 1
                 shard_clips = 0
 
