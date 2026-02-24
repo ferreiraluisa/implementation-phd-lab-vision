@@ -1,6 +1,7 @@
 import os
 import glob
 from typing import List, Optional
+from pathlib import Path
 
 import torch
 from torch.utils.data import Dataset
@@ -34,7 +35,7 @@ class Human36MFeatureClips(Dataset):
         augment: bool = False, 
         shard_cache_size: int = 2,
     ):
-        self.root = root
+        self.root = Path(root)
         self.test_set = test_set  
         self.augment = augment  
         self._cache_sz = shard_cache_size
