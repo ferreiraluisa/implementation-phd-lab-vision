@@ -48,7 +48,7 @@ class Human36MFeatureClips(Dataset):
             )
         idx_data = torch.load(index_path, map_location="cpu", weights_only=True)
 
-        self._n_vars   = idx_data["n_vars"]
+        self._n_vars   = idx_data["n_variants"]
         self._aug_names = idx_data.get("aug_names", ["orig"])
         all_clips      = idx_data["clips"]   # list of dicts
 
