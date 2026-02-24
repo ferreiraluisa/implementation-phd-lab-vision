@@ -280,7 +280,8 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
 
 def main():
     parser = argparse.ArgumentParser("Phase-1 training: freeze ResNet, train f_movie + f_3D (3D joints + 2D reprojection)")
-    parser.add_argument("--root", type=str, default=H36M_ROOT)
+    parser.add_argument("--train", type=str, default=H36M_ROOT)
+    parser.add_argument("--val", type=str, default=H36M_ROOT)  
     parser.add_argument("--seq-len", type=int, default=SEQ_LEN)
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--lr", type=float, default=LR)
@@ -321,11 +322,11 @@ def main():
     # load data
     # load data
     train_set = Human36MFeatureClips(
-        root=args.root,
+        root=args.train,
         subjects=[1, 6, 7, 8],
     )
     val_set = Human36MFeatureClips(
-        root=args.root,
+        root=args.val,
         subjects=[5],
     )
 
