@@ -294,7 +294,7 @@ def main():
 
     # Flush any remaining clips
     if shard_clips > 0:
-        flush_shard(shard_buf, shard_id)
+        flush_shard(shard_buf, shard_id, n_vars, out_root, writer)
         shard_id += 1
             
     # save global index
