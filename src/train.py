@@ -280,8 +280,7 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
 
 def main():
     parser = argparse.ArgumentParser("Phase-1 training: freeze ResNet, train f_movie + f_3D (3D joints + 2D reprojection)")
-    parser.add_argument("--train", type=str, default=H36M_ROOT)
-    parser.add_argument("--val", type=str, default=H36M_ROOT)  
+    parser.add_argument("--root", type=str, default=H36M_ROOT)
     parser.add_argument("--seq-len", type=int, default=SEQ_LEN)
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--lr", type=float, default=LR)
@@ -322,13 +321,11 @@ def main():
     # load data
     # load data
     train_set = Human36MFeatureClips(
-        root=args.train,
+        root=args.root,
         subjects=[1, 6, 7, 8],
-        augment=True,  # use data augmentation for training
-        shard_cache_size=999
     )
     val_set = Human36MFeatureClips(
-        root=args.val,
+        root=args.root,
         subjects=[5],
     )
 
@@ -345,9 +342,6 @@ def main():
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
-        pin_memory=True,
-        prefetch_factor=4 if args.num_workers > 0 else None,
-        persistent_workers=True if args.num_workers > 0 else False,
     )
     val_loader = DataLoader(
         val_set,
@@ -355,9 +349,6 @@ def main():
         shuffle=False,
         num_workers=max(1, args.num_workers // 2),
         drop_last=False,
-        pin_memory=True,
-        prefetch_factor=4 if args.num_workers > 0 else None,
-        persistent_workers=True if args.num_workers > 0 else False,
     )
 
     model = PHD(latent_dim=1024, joints_num=JOINTS_NUM, number_blocks=2)
