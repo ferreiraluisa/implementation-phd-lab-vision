@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from samplers import ShardGroupedBatchSampler
 
 from config import (
     DEVICE,
@@ -332,6 +333,14 @@ def main():
         subjects=[5],
     )
 
+    batch_sampler = ShardGroupedBatchSampler(
+        train_set,
+        batch_size=effective_batch_size,   
+        shuffle=True,
+        drop_last=True,
+        seed=epoch,                   
+    )
+
     # DataLoader optimizations
     # loader_kwargs = {
     #     'pin_memory': True if torch.cuda.is_available() else False,
@@ -341,10 +350,8 @@ def main():
 
     train_loader = DataLoader(
         train_set,
-        batch_size=effective_batch_size,
-        shuffle=False,
+        batch_sampler=batch_sampler,
         num_workers=args.num_workers,
-        drop_last=True,
         pin_memory=True,
         prefetch_factor=1, 
         persistent_workers=True 
