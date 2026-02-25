@@ -39,6 +39,7 @@ class Human36MFeatureClips(Dataset):
         self.test_set = test_set  
         self.augment = augment  
         self._cache_sz = shard_cache_size
+        self._load_calls = 0
 
         index_path = self.root / "index.pt"
         if not index_path.exists():
@@ -97,6 +98,9 @@ class Human36MFeatureClips(Dataset):
             oldest = self._cache_order.pop(0)
             del self._shard_cache[oldest]
 
+        self._load_calls += 1
+        if self._load_calls % 200 == 0:
+            print(f"[Worker] shard loads so far: {self._load_calls} | cache={len(self._shard_cache)}")
         path = self.root / f"shard_{shard_id:05d}.pt"
         shard = torch.load(path, map_location="cpu", weights_only=True)
         self._shard_cache[shard_id] = shard

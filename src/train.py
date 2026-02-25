@@ -286,7 +286,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--lr", type=float, default=LR)
     parser.add_argument("--epochs", type=int, default=EPOCHS)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--lambda-2d", type=float, default=1e-6, help="2D reprojection loss weight")
     parser.add_argument("--outdir", type=str, default="./runs/phase1")
     parser.add_argument("--resume", type=str, default=None)
@@ -325,7 +325,7 @@ def main():
         root=args.train,
         subjects=[1, 6, 7, 8],
         augment=True,  # use data augmentation for training
-        shard_cache_size=999
+        shard_cache_size=64
     )
     val_set = Human36MFeatureClips(
         root=args.val,
@@ -346,8 +346,8 @@ def main():
         num_workers=args.num_workers,
         drop_last=True,
         pin_memory=True,
-        prefetch_factor=4 if args.num_workers > 0 else None,
-        persistent_workers=True if args.num_workers > 0 else False,
+        prefetch_factor=1, 
+        persistent_workers=True 
     )
     val_loader = DataLoader(
         val_set,
