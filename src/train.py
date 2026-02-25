@@ -325,6 +325,7 @@ def main():
         root=args.train,
         subjects=[1, 6, 7, 8],
         augment=True,  # use data augmentation for training
+        shard_cache_size=999
     )
     val_set = Human36MFeatureClips(
         root=args.val,
