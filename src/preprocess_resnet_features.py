@@ -53,6 +53,19 @@ class AsyncFileWriter:
         self.queue.put(None)
         self.thread.join()
 
+def _meta_at(meta_batch, b: int):
+    # meta_batch is a dict produced by default_collate: {key: list/tensor of length B}
+    out = {}
+    for k, v in meta_batch.items():
+        if torch.is_tensor(v):
+            # tensor with shape (B, ...) -> select b
+            vb = v[b]
+            out[k] = vb.item() if vb.numel() == 1 else vb
+        else:
+            # list/tuple -> select b
+            out[k] = v[b]
+    return out
+
 
 @torch.no_grad()
 def main():
@@ -200,7 +213,7 @@ def main():
                 "frame_skip": args.frame_skip,  
                 "seq_len": args.seq_len,
             }
-            save_meta.update(meta[b])  # adds aug flags etc
+            save_meta.update(_meta_at(meta, b))  # adds aug flags etc
 
             payload = {**payload, "meta": save_meta}
             
