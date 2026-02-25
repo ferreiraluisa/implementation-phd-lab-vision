@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import Dataset
-
+from torch.utils.data import get_worker_info
 """
 This module provides a Dataset class to load precomputed ResNet50 features
 for Human3.6M video clips. The preprocess was made with preprocess_resnet_features.py.
@@ -100,7 +100,9 @@ class Human36MFeatureClips(Dataset):
 
         self._load_calls += 1
         if self._load_calls % 200 == 0:
-            print(f"[Worker] shard loads so far: {self._load_calls} | cache={len(self._shard_cache)}")
+            wi = get_worker_info()
+            wid = wi.id if wi else "main"
+            print(f"[w{wid}] shard loads: {self._load_calls} | cache={len(self._shard_cache)} | shard={shard_id}")
         path = self.root / f"shard_{shard_id:05d}.pt"
         shard = torch.load(path, map_location="cpu", weights_only=True)
         self._shard_cache[shard_id] = shard

@@ -342,7 +342,7 @@ def main():
     train_loader = DataLoader(
         train_set,
         batch_size=effective_batch_size,
-        shuffle=True,
+        shuffle=False,
         num_workers=args.num_workers,
         drop_last=True,
         pin_memory=True,
