@@ -24,6 +24,27 @@ K: (3,3) camera intrinsics adjusted for the cropped/resized frames
 
 Coded by Luisa Ferreira, 2026.
 """
+
+# added for data augmentation (horizontal flipping), to know which joints to swap when we flip the image horizontally, so that left/right limbs are correctly labeled after the flip. This is important for training a more robust model that can handle left-right variations in poses.
+# H36M joint index pairs that are mirrored across the body's left/right axis.
+# When we flip horizontally, we must swap each pair so that e.g. left hip <-> right hip.
+# Joint ordering follows the standard H36M 17-joint skeleton:
+# 0:  Pelvis (root)
+# 1:  R_Hip,   2: R_Knee,  3: R_Ankle
+# 4:  L_Hip,   5: L_Knee,  6: L_Ankle
+# 7:  Spine,   8: Neck/Thorax
+# 9:  Nose,   10: Head
+# 11: L_Shoulder, 12: L_Elbow, 13: L_Wrist
+# 14: R_Shoulder, 15: R_Elbow, 16: R_Wrist
+H36M_FLIP_PAIRS = [
+    (1, 4),   # R_Hip   <-> L_Hip
+    (2, 5),   # R_Knee  <-> L_Knee
+    (3, 6),   # R_Ankle <-> L_Ankle
+    (14, 11), # R_Shoulder <-> L_Shoulder
+    (15, 12), # R_Elbow    <-> L_Elbow
+    (16, 13), # R_Wrist    <-> L_Wrist
+]
+
 @dataclass # used for creating simple classes to hold clip metadata, like video path, gt path, subject, action, cam, start/end frames, etc, without needing to write boilerplate code for init, repr, etc.
 class ClipIndex:
     video_path: str
@@ -130,6 +151,61 @@ def _crop_and_resize_video_uint8(frames_uint8, box, out_size=224):
     frames = frames.to(torch.float32) / 255.0
     return frames
 
+# ---------------------------------------------------------------------------
+# Augmentation helpers
+# ---------------------------------------------------------------------------
+
+def _aug_hflip(video, joints3d, joints2d, K):
+    # horizontal flip + fix joints and K
+    # if torch.rand(1).item() > p:
+    #     return video, joints2d, joints3d, K
+
+    W = video.shape[-1]  # 224
+
+    # --- video ---
+    video = torch.flip(video, dims=[-1])
+
+    # --- joints2d: mirror x ---
+    joints2d = joints2d.clone()
+    joints2d[..., 0] = W - joints2d[..., 0]
+
+    # --- joints3d: negate x (camera space convention) ---
+    joints3d = joints3d.clone()
+    joints3d[..., 0] = -joints3d[..., 0]
+
+    # --- swap left/right joint pairs ---
+    for l_idx, r_idx in H36M_FLIP_PAIRS:
+        joints2d[:, [l_idx, r_idx]] = joints2d[:, [r_idx, l_idx]]
+        joints3d[:, [l_idx, r_idx]] = joints3d[:, [r_idx, l_idx]]
+
+    # --- K: principal point cx mirrors to W - cx ---
+    K = K.clone()
+    K[0, 2] = W - K[0, 2]
+
+    return video, joints3d, joints2d, K
+
+
+def _aug_color_jitter(video):
+    # Color jitter can help the model be more robust to variations in lighting and appearance. It randomly changes the brightness, contrast, saturation, and hue of the video frames, which can help prevent overfitting to specific lighting conditions or colors in the training data. This augmentation encourages the model to learn more general features that are invariant to such changes, improving its ability to generalize to new videos with different lighting and color characteristics.
+
+    jitter = T.ColorJitter(
+        brightness=0.3,
+        contrast=0.3,
+        saturation=0.2,
+        hue=0.05,
+    )
+    # torchvision v2 handles (T, C, H, W) batches natively
+    return jitter(video)
+
+
+def _aug_temporal_reverse(video, joints3d, joints2d):
+    # Reverse the temporal order of the clip, which can help the model learn to predict in both forward and backward time directions, improving its robustness and generalization to different motion patterns. When we reverse the video frames, we also need to reverse the order of the joints2d and joints3d sequences so that they still correspond correctly to each frame.
+
+    video    = torch.flip(video,    dims=[0])
+    joints2d = torch.flip(joints2d, dims=[0])
+    joints3d = torch.flip(joints3d, dims=[0])
+    return video, joints3d, joints2d
+
 
 class Human36MPreprocessedClips(Dataset):
     def __init__(
@@ -143,6 +219,9 @@ class Human36MPreprocessedClips(Dataset):
         resize: int = 224,
         crop_scale: float = 1.6,
         max_clips: Optional[int] = None,
+        augment: bool = False,
+        aug_hflip_p: float = 0.5,
+        aug_temporal_reverse_p: float = 0.5,
     ):
         super().__init__()
         self.root = root
@@ -152,6 +231,9 @@ class Human36MPreprocessedClips(Dataset):
         self.frame_skip = frame_skip
         self.resize = resize
         self.crop_scale = crop_scale
+        self.augment = augment
+        self.aug_hflip_p = aug_hflip_p
+        self.aug_temporal_reverse_p = aug_temporal_reverse_p
 
         self.frame_tf = T.Compose([
             T.Normalize(mean=(0.485, 0.456, 0.406),
@@ -161,8 +243,7 @@ class Human36MPreprocessedClips(Dataset):
         self.index: List[ClipIndex] = []
         self._gt_cache = {}
         self._cam_cache = {}
-        
-        # NEW: Track which clips belong to which video for potential batching
+
         self._video_to_clips = defaultdict(list)
         video_counter = 0
 
@@ -216,12 +297,12 @@ class Human36MPreprocessedClips(Dataset):
                         )
                         self.index.append(clip_idx)
                         self._video_to_clips[video_path].append(len(self.index) - 1)
-                        
+
                         if max_clips is not None and len(self.index) >= max_clips:
                             break
-                    
+
                     video_counter += 1
-                    
+
                     if max_clips is not None and len(self.index) >= max_clips:
                         break
                 if max_clips is not None and len(self.index) >= max_clips:
@@ -237,51 +318,44 @@ class Human36MPreprocessedClips(Dataset):
 
     def _read_video_uint8_clip_fast(self, video_path, start, end):
         try:
-            # nn.VideoReader is much faster than torchvision.io.read_video, but can be less robust on some files.
             reader = VideoReader(video_path, "video")
             metadata = reader.get_metadata()
             fps = metadata['video']['fps'][0]
-            
-            # calculate the timestamp to seek to, based on the start frame and frame_skip
+
             start_time = (start * self.frame_skip) / fps
-            
+
             reader.seek(start_time)
-            
+
             frames = []
             target_frames = end - start
             frame_idx = 0
-            
-            # read frames with skip
+
             for frame in reader:
                 if frame_idx % self.frame_skip == 0:
                     frame_data = frame['data']        # (C,H,W)
-                    frame_data = frame_data.permute(1, 2, 0)  # (H,W,C) ← FIXED!
-                    frames.append(frame_data)    
+                    frame_data = frame_data.permute(1, 2, 0)  # (H,W,C)
+                    frames.append(frame_data)
                     if len(frames) >= target_frames:
                         break
                 frame_idx += 1
-                
-                # Safety: don't read too far
+
                 if frame_idx > target_frames * self.frame_skip * 2:
                     break
-            
+
             if len(frames) < target_frames:
-                # fallback to old method if we couldn't read enough frames
                 return self._read_video_uint8_clip(video_path, start, end)
-            
+
             return torch.stack(frames[:target_frames])
-            
+
         except Exception as e:
-            # fallback to old method torchvision.io.read_video which is more robust but slower
             print("VideoReader failed for {}, falling back to legacy method. Error: {}".format(video_path, e))
             return self._read_video_uint8_clip(video_path, start, end)
 
     def _read_video_uint8_clip(self, video_path, start, end):
-        # read video using torchvision, which is more robust but much slower than nn.VideoReader
         frames, _, _ = torchvision.io.read_video(video_path, pts_unit="sec")
         frames = frames[::self.frame_skip]
         frames = frames[start:end]
-        
+
         if frames.shape[0] != (end - start):
             raise RuntimeError(
                 f"Frame count mismatch reading {video_path}: "
@@ -292,8 +366,20 @@ class Human36MPreprocessedClips(Dataset):
     def __getitem__(self, idx):
         ci = self.index[idx]
 
+        meta = {
+            "idx": int(idx),
+            "video_path": ci.video_path,
+            "subject": int(ci.subject),
+            "action": ci.action,
+            "cam": ci.cam,
+            "start": int(ci.start),
+            "end": int(ci.end),
+            "aug_hflip": False,
+            "aug_trev": False,
+        }
+
         frames_uint8 = self._read_video_uint8_clip_fast(ci.video_path, ci.start, ci.end)
-        
+
         Tt, H, W, C = frames_uint8.shape
         assert C == 3
 
@@ -308,12 +394,12 @@ class Human36MPreprocessedClips(Dataset):
 
         joints3d = joints3d_all[orig_idx]
         joints2d = joints2d_all[orig_idx]
-        
+
         assert frames_uint8.shape[0] == joints3d.shape[0], (
             f"Mismatch T: video {frames_uint8.shape[0]} vs joints {joints3d.shape[0]}"
         )
-    
-        # compute box that tightly crops the person in the clip, so the image can be centered on the subject 
+
+        # Compute tight crop around the person
         box = _compute_square_crop_from_2d(
             joints2d=joints2d,
             img_h=H,
@@ -321,18 +407,27 @@ class Human36MPreprocessedClips(Dataset):
             scale=self.crop_scale,
         )
 
-        # compute crop on video frames, adjust joints2d and camera intrinsics accordingly
-        video = _crop_and_resize_video_uint8(frames_uint8, box, out_size=self.resize)
+        # Crop, resize, and adjust annotations
+        video    = _crop_and_resize_video_uint8(frames_uint8, box, out_size=self.resize)
         joints2d = _adjust_joints2d_after_crop_and_resize(joints2d=joints2d, box=box, out_size=self.resize)
-        K = _adjust_camera_after_crop_and_resize(ci.cam_params, box=box, out_size=self.resize)
+        K        = _adjust_camera_after_crop_and_resize(ci.cam_params, box=box, out_size=self.resize)
 
+        if self.augment:
+            if torch.rand(1).item() < self.aug_hflip_p:
+                video, joints3d, joints2d, K = _aug_hflip(video, joints3d, joints2d, K)
+                meta["aug_hflip"] = True
 
-        # normalize video for ResNet
+            if torch.rand(1).item() < self.aug_temporal_reverse_p:
+                video, joints3d, joints2d = _aug_temporal_reverse(video, joints3d, joints2d)
+                meta["aug_trev"] = True
+
+        # Normalize video for ResNet (ImageNet mean/std)
         video = self.frame_tf(video)
 
-        # __getitem__ returns:  
-        # video (T,3,224,224), => T is number of frame in clip and 224 is the resized frame size, normalized for ResNet
-        # joints3d (T,17,3), 
-        # joints2d (T,17,2), 
-        # K (3,3)
-        return video, joints3d, joints2d, K, box
+        # Returns:
+        # video    (T, 3, 224, 224)  normalized for ResNet
+        # joints3d (T, 17, 3)
+        # joints2d (T, 17, 2)
+        # K        (3, 3)
+        # box      (4,)
+        return video, joints3d, joints2d, K, box, meta
