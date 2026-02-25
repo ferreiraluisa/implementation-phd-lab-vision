@@ -338,7 +338,7 @@ def main():
         batch_size=effective_batch_size,   
         shuffle=True,
         drop_last=True,
-        seed=epoch,                   
+        seed=0,                   
     )
 
     # DataLoader optimizations
@@ -416,6 +416,7 @@ def main():
     print("============================")
 
     for epoch in range(start_epoch, args.epochs):
+        batch_sampler.set_epoch(epoch)  
         print(f"\nEpoch {epoch+1}/{args.epochs}")
         t_epoch = time.time()
 

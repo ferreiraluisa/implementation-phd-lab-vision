@@ -25,6 +25,9 @@ class ShardGroupedBatchSampler(Sampler):
             buckets[clip["shard_id"]].append(idx)
         self.buckets = dict(buckets)
 
+    def set_epoch(self, epoch):
+        self.seed = epoch
+
     def __iter__(self):
         rng = random.Random(self.seed)
         shard_ids = list(self.buckets.keys())
