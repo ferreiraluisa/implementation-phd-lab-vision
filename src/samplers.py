@@ -2,28 +2,28 @@ import random
 from collections import defaultdict
 from torch.utils.data import Sampler
 
-""""
-Resolves data loading taking so much when use shards to make many variants per clip (n_vars=10) and many clips per shard (e.g. 100), which causes a lot of thrashing when the DataLoader workers load shards in random order and then only use a few samples from each shard before moving on to the next one.
-"""
-class ShardGroupedBatchSampler(Sampler):
+class MixedShardBatchSampler(Sampler):
     """
-    Shuffle with locality:
-      - shuffle order of shards
-      - shuffle indices inside each shard
-      - yield batches mostly from same shard (prevents shard thrash)
+    Shuffle + locality, but mix shards inside each batch:
+      - keep per-shard buckets (like your current sampler)
+      - pick K shards at a time
+      - draw batch_size/K samples from each (round-robin)
     """
-    def __init__(self, dataset, batch_size, shuffle=True, drop_last=True, seed=0):
+    def __init__(self, dataset, batch_size, shards_per_batch=4,
+                 shuffle=True, drop_last=True, seed=0):
+        assert batch_size % shards_per_batch == 0
         self.dataset = dataset
         self.batch_size = batch_size
+        self.K = shards_per_batch
+        self.per_shard = batch_size // shards_per_batch
         self.shuffle = shuffle
         self.drop_last = drop_last
         self.seed = seed
 
         buckets = defaultdict(list)
-        # dataset._items = [(clip_dict, var_offset), ...]
         for idx, (clip, var) in enumerate(dataset._items):
             buckets[clip["shard_id"]].append(idx)
-        self.buckets = dict(buckets)
+        self.buckets = {k: v for k, v in buckets.items()}
 
     def set_epoch(self, epoch):
         self.seed = epoch
@@ -34,22 +34,34 @@ class ShardGroupedBatchSampler(Sampler):
         if self.shuffle:
             rng.shuffle(shard_ids)
 
+        # make per-shard streams
+        streams = {}
         for sid in shard_ids:
-            inds = self.buckets[sid]
+            inds = self.buckets[sid].copy()
             if self.shuffle:
                 rng.shuffle(inds)
+            streams[sid] = inds
 
-            for i in range(0, len(inds), self.batch_size):
-                batch = inds[i:i + self.batch_size]
-                if len(batch) < self.batch_size and self.drop_last:
+        # active shards with remaining samples
+        active = [sid for sid in shard_ids if len(streams[sid]) > 0]
+
+        while len(active) >= self.K:
+            chosen = rng.sample(active, self.K) if self.shuffle else active[:self.K]
+            batch = []
+            for sid in chosen:
+                take = min(self.per_shard, len(streams[sid]))
+                batch.extend(streams[sid][:take])
+                del streams[sid][:take]
+                if len(streams[sid]) == 0:
+                    active.remove(sid)
+
+            if len(batch) < self.batch_size:
+                if self.drop_last:
                     continue
-                yield batch
+                # if not drop_last, yield partial
+            yield batch
 
     def __len__(self):
-        n = 0
-        for inds in self.buckets.values():
-            if self.drop_last:
-                n += len(inds) // self.batch_size
-            else:
-                n += (len(inds) + self.batch_size - 1) // self.batch_size
-        return n
+        # rough lower bound; exact len depends on shard distributions
+        total = len(self.dataset)
+        return total // self.batch_size if self.drop_last else (total + self.batch_size - 1) // self.batch_size

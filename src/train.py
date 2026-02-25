@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from samplers import ShardGroupedBatchSampler
+from samplers import MixedShardBatchSampler
 
 from config import (
     DEVICE,
@@ -333,7 +333,7 @@ def main():
         subjects=[5],
     )
 
-    batch_sampler = ShardGroupedBatchSampler(
+    batch_sampler = MixedShardBatchSampler(
         train_set,
         batch_size=effective_batch_size,   
         shuffle=True,
