@@ -23,17 +23,6 @@ Coded by Luísa Ferreira, 2026
 
 Used Claude to help optimize and refactor the code for better performance and readability.
 (older version was taking too long(5 hours to process only 6k/200k clips), this version processes all ~20k clips in ~30 minutes on a single GPU).
-
-Shard writing is randomized at the CLIP level: clips are buffered into a large shuffle pool,
-randomly permuted, then packed into shards. This ensures that:
-  - Clips from the same subject/action/camera are scattered across different shards.
-  - All n_vars variants of a clip stay as consecutive rows within the same shard,
-    which is required by the dataset class (row = clip["row"] + var_offset).
-  - Your within-shard sampler sees maximally decorrelated clips at training time.
-
-The shuffle pool size (--shuffle-pool) controls the trade-off between RAM usage and randomness
-quality. Default is 8192 clips, which at fp16 + seq_len=40 costs ~5 GB RAM. Set lower if needed.
-Clips that don't fill a complete shard at pool-flush time carry over to the next pool.
 """
 AUG_NAMES = ["orig", "cjitter", "hflip", "trev"]
 
@@ -67,7 +56,6 @@ class AsyncFileWriter:
         self.queue.put(None)
         self.thread.join()
 
-
 def augment_collate_fn(batch):
     # when augment = True, each sample in the batch is a list of augmented variants of the same clip, so we need to collate them separately and return a list of collated batches, one for each variant.
     n_variants = len(batch[0])
@@ -80,100 +68,67 @@ def augment_collate_fn(batch):
         collated.append((videos, joints3d, joints2d, K))
     return collated
 
+def empty_shard_buffer():
+    return {
+        "feats": [],
+        "joints3d": [],
+        "joints2d": [],
+        "K": [],
+        "meta": []
+    }
 
-def flush_pool_to_shards(pool, shard_id, n_vars, out_root, writer, shard_size, clip_index, carry_over):
-    """
-    Shuffle `pool` (list of clip dicts) at the CLIP level, then pack into shards.
-
-    Each clip occupies exactly n_vars consecutive rows:
-        row 0 → orig, row 1 → cjitter, row 2 → hflip, row 3 → trev  (or just row 0 if no augment)
-    This matches the dataset access pattern: shard["feats"][clip["row"] + var_offset].
-
-    shard_size must be a multiple of n_vars so clips are never split across shards.
-    Clips that don't fill a complete shard carry over to the next pool flush.
-    Returns (shard_id, carry_over).
-    """
-    assert shard_size % n_vars == 0, \
-        f"--shard-size ({shard_size}) must be a multiple of n_vars ({n_vars})"
-
-    clips_per_shard = shard_size // n_vars
-    combined = carry_over + pool
-
-    # Shuffle at clip level — subjects/actions get mixed, variants stay together.
-    random.shuffle(combined)
-
-    n_full_shards = len(combined) // clips_per_shard
-    for s in range(n_full_shards):
-        clips = combined[s * clips_per_shard : (s + 1) * clips_per_shard]
-
-        # Flatten variants: for each clip write all n_vars rows consecutively.
-        rows_feat, rows_j3d, rows_j2d, rows_K, rows_meta = [], [], [], [], []
-        for clip_i, c in enumerate(clips):
-            base_row = clip_i * n_vars
-            for v_idx in range(n_vars):
-                rows_feat.append(c["variants"][v_idx]["feat"])
-                rows_j3d.append(c["variants"][v_idx]["joints3d"])
-                rows_j2d.append(c["variants"][v_idx]["joints2d"])
-                rows_K.append(c["variants"][v_idx]["K"])
-                rows_meta.append(c["variants"][v_idx]["meta"])
-
-            # clip_index points to the FIRST row (orig); dataset adds var_offset.
-            clip_index.append({
-                "shard_id": shard_id,
-                "row":      base_row,
-                "subject":  c["subject"],
-                "action":   c["action"],
-                "cam":      c["cam"],
-                "start":    c["start"],
-                "end":      c["end"],
-            })
-
-        shard_dict = {
-            "feats":    torch.stack(rows_feat),    # (shard_size, T, 2048)
-            "joints3d": torch.stack(rows_j3d),     # (shard_size, T, 17, 3)
-            "joints2d": torch.stack(rows_j2d),     # (shard_size, T, 17, 2)
-            "K":        torch.stack(rows_K),        # (shard_size, 3, 3)
-            "meta":     rows_meta,
-            "n_vars":   n_vars,
-        }
-        path = out_root / f"shard_{shard_id:05d}.pt"
-        writer.save(shard_dict, path)
-        shard_id += 1
-
-    new_carry_over = combined[n_full_shards * clips_per_shard:]
-    return shard_id, new_carry_over
-
-
-def write_final_shard(clips, shard_id, n_vars, out_root, writer, clip_index):
-    """Write a partial (last) shard from whatever clips remain."""
-    rows_feat, rows_j3d, rows_j2d, rows_K, rows_meta = [], [], [], [], []
-    for clip_i, c in enumerate(clips):
-        base_row = clip_i * n_vars
-        for v_idx in range(n_vars):
-            rows_feat.append(c["variants"][v_idx]["feat"])
-            rows_j3d.append(c["variants"][v_idx]["joints3d"])
-            rows_j2d.append(c["variants"][v_idx]["joints2d"])
-            rows_K.append(c["variants"][v_idx]["K"])
-            rows_meta.append(c["variants"][v_idx]["meta"])
-        clip_index.append({
-            "shard_id": shard_id,
-            "row":      base_row,
-            "subject":  c["subject"],
-            "action":   c["action"],
-            "cam":      c["cam"],
-            "start":    c["start"],
-            "end":      c["end"],
-        })
+def flush_shard(buf, sid, n_vars, out_root, writer):
     shard_dict = {
-        "feats":    torch.stack(rows_feat),
-        "joints3d": torch.stack(rows_j3d),
-        "joints2d": torch.stack(rows_j2d),
-        "K":        torch.stack(rows_K),
-        "meta":     rows_meta,
+        "feats":    torch.stack(buf["feats"]),     # (rows, T, 2048)
+        "joints3d": torch.stack(buf["joints3d"]),  # (rows, T, 17, 3)
+        "joints2d": torch.stack(buf["joints2d"]),  # (rows, T, 17, 2)
+        "K":        torch.stack(buf["K"]),         # (rows, 3, 3)
+        "meta":     buf["meta"],                   # list of dicts
         "n_vars":   n_vars,
     }
-    path = out_root / f"shard_{shard_id:05d}.pt"
+    path = out_root / f"shard_{sid:05d}.pt"
     writer.save(shard_dict, path)
+    return empty_shard_buffer()
+
+
+def flush_pool_groups_to_shards(pool_groups, carry_over_groups, shard_id, n_vars, out_root, writer, shard_size, clip_index, rng):
+    # NOTE (EN): We shuffle at the CLIP level, but keep all variants of the same clip contiguous on disk.
+    # Each element of `pool_groups` / `carry_over_groups` is a list of length n_vars (orig, cjitter, hflip, trev).
+    combined = carry_over_groups + pool_groups
+    rng.shuffle(combined)
+
+    n_full = len(combined) // shard_size
+    for s in range(n_full):
+        groups = combined[s * shard_size : (s + 1) * shard_size]
+
+        shard_buf = empty_shard_buffer()
+        for i, g in enumerate(groups):
+            # index stores ONE record per clip; row points to the first variant row (row + var_offset)
+            base_row = i * n_vars
+            m0 = g[0]["meta"]  # use meta from the first variant (orig)
+            clip_index.append({
+                "shard_id": shard_id,
+                "row": base_row,
+                "subject": m0["subject"],
+                "action": m0["action"],
+                "cam": m0["cam"],
+                "start": m0["start"],
+                "end": m0["end"],
+            })
+
+            # write variants contiguously
+            for e in g:
+                shard_buf["feats"].append(e["feat"])
+                shard_buf["joints3d"].append(e["joints3d"])
+                shard_buf["joints2d"].append(e["joints2d"])
+                shard_buf["K"].append(e["K"])
+                shard_buf["meta"].append(e["meta"])
+
+        flush_shard(shard_buf, shard_id, n_vars, out_root, writer)
+        shard_id += 1
+
+    new_carry = combined[n_full * shard_size:]
+    return shard_id, new_carry
 
 
 @torch.no_grad()
@@ -190,11 +145,12 @@ def main():
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--save-fp16", action="store_true", help="Store feats as float16")
     parser.add_argument("--augment", action="store_true", help="Apply data augmentation (random horizontal flip)")
-    parser.add_argument("--shard-size", type=int, default=512, help="Number of entries per shard file")
+    parser.add_argument("--shard-size", type=int, default=512, help="Number of clips per shard file")
+
+    # NOTE (EN): Shuffle controls. Shuffling is done by CLIP (group of variants), so variants stay contiguous.
     parser.add_argument("--shuffle-pool", type=int, default=8192,
-                        help="Number of clips to accumulate before shuffling and writing shards. "
-                             "Larger = better randomness, more RAM. "
-                             "At fp16 + seq_len=40: ~5 GB for 8192 clips × 4 variants.")
+                        help="Number of clips to accumulate before shuffling and writing shards. Larger = better randomness, more RAM.")
+    parser.add_argument("--shuffle-seed", type=int, default=123, help="Seed for clip-level shuffling.")
 
     args = parser.parse_args()
 
@@ -212,6 +168,10 @@ def main():
 
     out_root = Path(args.out)
     out_root.mkdir(parents=True, exist_ok=True)
+    print(f"Device: {device}")
+    if device.startswith("cuda"):
+        print(f"GPUs available: {torch.cuda.device_count()}")
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
 
     n_vars = len(AUG_NAMES) if args.augment else 1
 
@@ -220,12 +180,7 @@ def main():
         print(f"GPUs       : {torch.cuda.device_count()} × {torch.cuda.get_device_name(0)}")
     print(f"Augment    : {args.augment}  "
           f"({'4 variants/clip → ' + ', '.join(AUG_NAMES) if args.augment else 'none'})")
-    clips_per_shard = args.shard_size // n_vars
-    assert args.shard_size % n_vars == 0, \
-        f"--shard-size ({args.shard_size}) must be divisible by n_vars ({n_vars})"
-    print(f"Shard size : {args.shard_size} rows = {clips_per_shard} clips × {n_vars} variant(s)")
-    print(f"Shuffle pool: {args.shuffle_pool} clips — "
-          f"clips shuffled at clip level, variants stay as consecutive rows within the same shard")
+    print(f"Shard size : {args.shard_size} clips  ({args.shard_size * n_vars} variant entries/shard)")
 
     ds = Human36MPreprocessedClips(
         root=args.root,
@@ -244,7 +199,7 @@ def main():
         num_workers=args.num_workers,
         pin_memory=device.startswith("cuda"),
         drop_last=False,
-        prefetch_factor=2,
+        prefetch_factor=2,  
         collate_fn=augment_collate_fn if args.augment else None,
     )
 
@@ -253,11 +208,15 @@ def main():
     backbone = nn.Sequential(*list(resnet.children())[:-1])
     backbone = backbone.to(device).eval()
 
+    # -------------------------
+    # multi-gpu with nn.DataParallel
+    # -------------------------
     use_dp = device.startswith("cuda") and (torch.cuda.device_count() > 1)
     if use_dp:
         print(f"Using DataParallel on {torch.cuda.device_count()} GPUs")
         backbone = nn.DataParallel(backbone)
 
+    # Compile for massive speedup (PyTorch 2.0+)
     use_compile = (not use_dp) and device.startswith("cuda")
     if use_compile:
         try:
@@ -267,8 +226,12 @@ def main():
             print(f"Warning: torch.compile failed ({e}), continuing without compilation")
 
     # async writer
-    writer = AsyncFileWriter()
+    writer = AsyncFileWriter() 
 
+    global_i = 0
+    t_all = time.time()
+    t_last = time.time()
+    
     print("Warming up compiled model...")
     warmup_batch = next(iter(loader))
     warmup_video = (warmup_batch[0][0] if args.augment else warmup_batch[0]).to(device, non_blocking=True)
@@ -281,25 +244,31 @@ def main():
         torch.cuda.synchronize()
     print("✓ Warmup complete\n")
 
-    n_clips = len(ds)
-    print(f"Processing {n_clips} clips × {n_vars} variant(s) = {n_clips * n_vars} entries …")
-    print(f"Writing shards of {args.shard_size} entries each → {out_root}")
+    print(f"\nProcessing {len(ds)} clips...")
     print("-" * 60)
 
-    feat_dtype = torch.float16 if args.save_fp16 else torch.float32
+    # shard buffers 
+    # accumulate clips in memory and save to disk in larger shard files to reduce overhead of many small file writes, especially important when augmenting (4x more entries).
+    shard_buf = empty_shard_buffer()
+    shard_id = 0    
+    shard_clips = 0
+    clip_index = []
 
-    # --- Shuffle pool & shard state ---
-    # `shuffle_pool` is a list of CLIP dicts. Each clip dict holds all its variant
-    # data nested inside, so the shuffle operates at clip granularity — variants
-    # always travel together and land as consecutive rows in the same shard.
-    shuffle_pool: list = []
-    carry_over:   list = []
-    clip_index:   list = []
-    shard_id:     int  = 0
+    n_clips = len(ds)
 
     global_clip_i = 0
-    t_all  = time.time()
+    t_all = time.time()
     t_last = time.time()
+
+    print(f"Processing {n_clips} clips × {n_vars} variant(s) = {n_clips * n_vars} entries …")
+    print(f"Writing shards of {args.shard_size} clips each → {out_root}")
+    print("-" * 60)
+
+    # NOTE (EN): Clip-level shuffle pool. We buffer groups (clip × variants), shuffle groups,
+    # then write shards while keeping each group's variants contiguous.
+    rng = random.Random(args.shuffle_seed)
+    shuffle_pool = []       # list of groups; each group is a list of `n_vars` entries
+    carry_over = []         # leftover groups that did not fill a full shard in the last flush
 
     for batch in loader:
         if args.augment:
@@ -310,10 +279,11 @@ def main():
             variants_batch = [(video, joints3d, joints2d, K)]
             box_batch = box
 
-        B = variants_batch[0][0].shape[0]
+        B = variants_batch[0][0].shape[0]  # batch size
 
-        # Run ResNet on every variant.
         all_feats = []
+        feat_dtype = torch.float16 if args.save_fp16 else torch.float32
+        # run resnet on every variant
         for v_video, _j3d, _j2d, _K in variants_batch:
             v_video = v_video.to(device, non_blocking=True)
             Bv, T, C, H, W = v_video.shape
@@ -326,46 +296,36 @@ def main():
                 feats = backbone(x).flatten(1).view(Bv, T, -1)
             all_feats.append(feats.to(feat_dtype).cpu())
 
-        # Build one clip-level dict per sample in the batch.
-        # All variants are nested inside so they always stay together through shuffling.
         for b in range(B):
             clip = ds.index[global_clip_i]
 
-            clip_dict = {
-                "subject": clip.subject,
-                "action":  clip.action,
-                "cam":     clip.cam,
-                "start":   clip.start,
-                "end":     clip.end,
-                "variants": [
-                    {
-                        "feat":     all_feats[v_idx][b],
-                        "joints3d": variants_batch[v_idx][1][b].cpu(),
-                        "joints2d": variants_batch[v_idx][2][b].cpu(),
-                        "K":        variants_batch[v_idx][3][b].cpu()
-                                    if variants_batch[v_idx][3].ndim >= 3
-                                    else variants_batch[v_idx][3].cpu(),
-                        "meta": {
-                            "subject": clip.subject,
-                            "action":  clip.action,
-                            "cam":     clip.cam,
-                            "start":   clip.start,
-                            "end":     clip.end,
-                            "aug":     AUG_NAMES[v_idx] if args.augment else "orig",
-                            "box":     box_batch[b].cpu() if box_batch is not None else None,
-                        },
+            group = []
+            for v_idx, (v_video, v_j3d, v_j2d, v_K) in enumerate(variants_batch):
+                group.append({
+                    "feat":     all_feats[v_idx][b],
+                    "joints3d": v_j3d[b].cpu(),
+                    "joints2d": v_j2d[b].cpu(),
+                    "K":        v_K[b].cpu() if v_K.ndim >= 3 else v_K.cpu(),
+                    "meta": {
+                        "subject":    clip.subject,
+                        "action":     clip.action,
+                        "cam":        clip.cam,
+                        "start":      clip.start,
+                        "end":        clip.end,
+                        "aug":        AUG_NAMES[v_idx] if args.augment else "orig",
+                        "box":        box_batch[b].cpu() if box_batch is not None else None,
                     }
-                    for v_idx in range(n_vars)
-                ],
-            }
-            shuffle_pool.append(clip_dict)
+                })
+
+            shuffle_pool.append(group)
             global_clip_i += 1
 
-            # Flush when the pool reaches the target size.
+            # NOTE (EN): Flush the pool once we have enough CLIPS (groups). Shard contents become mixed,
+            # but variants stay contiguous for row+var_offset addressing.
             if len(shuffle_pool) >= args.shuffle_pool:
-                shard_id, carry_over = flush_pool_to_shards(
-                    shuffle_pool, shard_id, n_vars, out_root, writer,
-                    args.shard_size, clip_index, carry_over
+                shard_id, carry_over = flush_pool_groups_to_shards(
+                    shuffle_pool, carry_over, shard_id, n_vars, out_root, writer,
+                    args.shard_size, clip_index, rng
                 )
                 shuffle_pool = []
 
@@ -378,81 +338,94 @@ def main():
             eta           = (n_clips - global_clip_i) / clips_per_sec if clips_per_sec > 0 else 0
             print(f"[{progress:5.1f}%] {global_clip_i:6d}/{n_clips} clips | "
                   f"{clips_per_sec:6.1f} clips/s | ETA {eta:6.1f}s | "
-                  f"shards written: {shard_id} | pool: {len(shuffle_pool)} clips buffered")
+                  f"shard {shard_id} (pool: {len(shuffle_pool)} clips, carry: {len(carry_over)} clips)")
 
-    # Final flush: shuffle whatever remains (pool + carry_over) and write all shards,
-    # including a potentially partial last shard.
-    final_pool = carry_over + shuffle_pool
-    random.shuffle(final_pool)
+    # Flush any remaining clips (pool + carry_over), writing full shards and a partial last shard if needed.
+    final_groups = carry_over + shuffle_pool
+    rng.shuffle(final_groups)
 
-    clips_per_shard = args.shard_size // n_vars
-    n_full = len(final_pool) // clips_per_shard
-
-    # Write all complete shards.
+    n_full = len(final_groups) // args.shard_size
     for s in range(n_full):
-        clips = final_pool[s * clips_per_shard : (s + 1) * clips_per_shard]
-        rows_feat, rows_j3d, rows_j2d, rows_K, rows_meta = [], [], [], [], []
-        for clip_i, c in enumerate(clips):
-            base_row = clip_i * n_vars
-            for v_idx in range(n_vars):
-                rows_feat.append(c["variants"][v_idx]["feat"])
-                rows_j3d.append(c["variants"][v_idx]["joints3d"])
-                rows_j2d.append(c["variants"][v_idx]["joints2d"])
-                rows_K.append(c["variants"][v_idx]["K"])
-                rows_meta.append(c["variants"][v_idx]["meta"])
+        groups = final_groups[s * args.shard_size : (s + 1) * args.shard_size]
+        shard_buf = empty_shard_buffer()
+
+        for i, g in enumerate(groups):
+            base_row = i * n_vars
+            m0 = g[0]["meta"]
             clip_index.append({
                 "shard_id": shard_id,
-                "row":      base_row,
-                "subject":  c["subject"],
-                "action":   c["action"],
-                "cam":      c["cam"],
-                "start":    c["start"],
-                "end":      c["end"],
+                "row": base_row,
+                "subject": m0["subject"],
+                "action": m0["action"],
+                "cam": m0["cam"],
+                "start": m0["start"],
+                "end": m0["end"],
             })
-        writer.save({
-            "feats":    torch.stack(rows_feat),
-            "joints3d": torch.stack(rows_j3d),
-            "joints2d": torch.stack(rows_j2d),
-            "K":        torch.stack(rows_K),
-            "meta":     rows_meta,
-            "n_vars":   n_vars,
-        }, out_root / f"shard_{shard_id:05d}.pt")
+            for e in g:
+                shard_buf["feats"].append(e["feat"])
+                shard_buf["joints3d"].append(e["joints3d"])
+                shard_buf["joints2d"].append(e["joints2d"])
+                shard_buf["K"].append(e["K"])
+                shard_buf["meta"].append(e["meta"])
+
+        flush_shard(shard_buf, shard_id, n_vars, out_root, writer)
         shard_id += 1
 
-    # Write the partial last shard (if any leftover clips remain).
-    leftover = final_pool[n_full * clips_per_shard:]
+    leftover = final_groups[n_full * args.shard_size:]
     if leftover:
-        write_final_shard(leftover, shard_id, n_vars, out_root, writer, clip_index)
+        shard_buf = empty_shard_buffer()
+        for i, g in enumerate(leftover):
+            base_row = i * n_vars
+            m0 = g[0]["meta"]
+            clip_index.append({
+                "shard_id": shard_id,
+                "row": base_row,
+                "subject": m0["subject"],
+                "action": m0["action"],
+                "cam": m0["cam"],
+                "start": m0["start"],
+                "end": m0["end"],
+            })
+            for e in g:
+                shard_buf["feats"].append(e["feat"])
+                shard_buf["joints3d"].append(e["joints3d"])
+                shard_buf["joints2d"].append(e["joints2d"])
+                shard_buf["K"].append(e["K"])
+                shard_buf["meta"].append(e["meta"])
+        flush_shard(shard_buf, shard_id, n_vars, out_root, writer)
         shard_id += 1
-
-    # Save global index.
+            
+    # save global index
     print("\nWaiting for all shards to be written to disk...")
     writer.wait()
     writer.stop()
 
     index_path = out_root / "index.pt"
     torch.save({
-        "clips":       clip_index,
-        "n_shards":    shard_id,
-        "n_clips":     n_clips,
-        "n_variants":  n_vars,
-        "aug_names":   AUG_NAMES if args.augment else ["orig"],
-        "seq_len":     args.seq_len,
-        "frame_skip":  args.frame_skip,
-        "feat_dtype":  "float16" if args.save_fp16 else "float32",
-        "randomized":  True,  # clips shuffled across shards; variants of each clip are consecutive rows in the same shard
+        "clips": clip_index,
+        "n_shards": shard_id,
+        "n_clips": n_clips,
+        "n_variants": n_vars,
+        "aug_names": AUG_NAMES if args.augment else ["orig"],
+        "seq_len": args.seq_len,
+        "frame_skip": args.frame_skip,
+        "feat_dtype": "float16" if args.save_fp16 else "float32",
+        # NOTE (EN): Variants are grouped contiguously per clip so dataset_features can use row+var_offset.
+        "variants_grouped": True,
+        "shuffle_seed": args.shuffle_seed,
+        "shuffle_pool": args.shuffle_pool,
     }, index_path)
 
     print("✓ All shards written and index saved.")
 
-    total_time = time.time() - t_all
+    total_time  = time.time() - t_all
+    files_saved = shard_id  # number of shard files
     print("-" * 60)
-    print(f"✓ Done!  {n_clips} clips × {n_vars} variant(s) packed into {shard_id} shard(s)")
+    print(f"✓ Done!  {n_clips} clips × {n_vars} variant(s) packed into {files_saved} shard(s)")
     print(f"✓ Total time        : {total_time:.1f}s")
     print(f"✓ Throughput        : {n_clips / total_time:.1f} clips/s  "
           f"({n_clips * n_vars / total_time:.1f} variant entries/s)")
     print(f"✓ Avg time per clip : {1000 * total_time / n_clips:.1f} ms")
-    print(f"✓ Shards are randomized at clip level — variants stay together as consecutive rows.")
 
 
 if __name__ == "__main__":
