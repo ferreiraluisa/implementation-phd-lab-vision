@@ -168,7 +168,11 @@ def main():
     
     print("Warming up compiled model...")
     warmup_batch = next(iter(loader))
-    warmup_video = warmup_batch[0].to(device, non_blocking=True)
+    if args.augment:
+        warmup_video = warmup_batch[0][0]  # first variant's videos tensor
+    else:
+        warmup_video = warmup_batch[0]  
+    warmup_video = warmup_video.to(device, non_blocking=True)
     B, T, C, H, W = warmup_video.shape
     with torch.autocast(device_type="cuda" if device.startswith("cuda") else "cpu", 
                         dtype=torch.bfloat16 if device.startswith("cuda") else torch.float32):
