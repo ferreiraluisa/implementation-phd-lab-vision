@@ -155,12 +155,18 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
             # We use a dedicated path that assumes feats = ResNet output (2048D)
             _phi, _phi_hat, joints_pred, _joints_hat = model.forward(feats, predict_future=False)
             # joints_pred: (B,T,J,3) assumed camera coordinates that match K
-
+            root = 0  # or pelvis index in your convention
+            joints3d_rr = joints3d - joints3d[:,:,root:root+1]
+            pred_rr = joints_pred - joints_pred[:,:,root:root+1]
+            l3d = (pred_rr - joints3d_rr).pow(2).mean()
+            mpjpe = mpjpe_m(pred_rr, joints3d_rr)
             # 3D loss
             l3d = (joints_pred - joints3d).pow(2).mean()
             # Bone length loss: encourage consistent limb lengths across time
+            lbone = bone_length_loss(pred_rr, joints3d_rr)
+            lvel = ( (pred_rr[:,1:] - pred_rr[:,:-1]) - (joints3d_rr[:,1:] - joints3d_rr[:,:-1]) ).pow(2).mean()
 
-            loss = l3d
+            loss = l3d + 0.1*lbone + 0.1*lvel 
 
         timers["forward+loss"] += (time.time() - t_fwd)
 
@@ -184,7 +190,7 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
         # --------------------
         running_loss += float(loss.item())
         running_l3d += float(l3d.item())
-        running_mpjpe += mpjpe_m(joints_pred.detach(), joints3d.detach())
+        running_mpjpe += mpjpe
         n_batches += 1
 
         t_iter_end = time.time()
@@ -195,7 +201,7 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
             dt_epoch = time.time() - epoch_start
             print(
                 f"[3D]  iter {it+1:05d}/{len(loader):05d} | "
-                f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f}) | "
+                f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f} + bone 0.1 * {lbone} + vel 0.1 * {lvel}) | "
                 f"mpjpe {running_mpjpe/n_batches:.3f} | "
                 f"time/iter {timers['iter']/n_batches:.4f}s | "
                 f"epoch {dt_epoch:.1f}s"
@@ -351,7 +357,7 @@ def main():
         drop_last=False,
     )
 
-    model = PHD(latent_dim=1024, joints_num=JOINTS_NUM, number_blocks=2)
+    model = PHD(joints_num=JOINTS_NUM)
 
     # ----------------------------------
     # TRAINING PHASE 1 : freeze ResNet, train f_movie + f_3D
