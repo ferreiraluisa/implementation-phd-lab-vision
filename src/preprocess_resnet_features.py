@@ -23,6 +23,7 @@ Used Claude to help optimize and refactor the code for better performance and re
 (older version was taking too long(5 hours to process only 6k/200k clips), this version processes all ~20k clips in ~30 minutes on a single GPU).
 """
 
+AUG_NAMES = ["", "hflip", "temp_rev"]  # must match the order of variants produced in dataset.py when augment=True
 
 class AsyncFileWriter:
     # asynchronous file writer using a background thread and a queue, to speed up saving features to disk without blocking the main processing loop
@@ -65,6 +66,18 @@ def _meta_at(meta_batch, b: int):
             # list/tuple -> select b
             out[k] = v[b]
     return out
+
+def augment_collate_fn(batch):
+    # when augment = True, each sample in the batch is a list of augmented variants of the same clip, so we need to collate them separately and return a list of collated batches, one for each variant.
+    n_variants = len(batch[0])
+    collated = []
+    for v in range(n_variants):
+        videos   = torch.stack([sample[v][0] for sample in batch])
+        joints3d = torch.stack([sample[v][1] for sample in batch])
+        joints2d = torch.stack([sample[v][2] for sample in batch])
+        K        = torch.stack([sample[v][3] for sample in batch])
+        collated.append((videos, joints3d, joints2d, K))
+    return collated
 
 
 @torch.no_grad()
@@ -120,6 +133,7 @@ def main():
         pin_memory=device.startswith("cuda"),
         drop_last=False,
         prefetch_factor=2,  
+        collate_fn=augment_collate_fn if args.augment else None,
         # persistent_workers=True,  # keep workers alive for the entire epoch, faster than respawning each time
     )
 
@@ -163,74 +177,94 @@ def main():
         torch.cuda.synchronize()
     print("✓ Warmup complete")
 
-    print(f"\nProcessing {len(ds)} clips...")
+    n_clips  = len(ds)
+    n_vars   = len(AUG_NAMES) if args.augment else 1
+
+    print(f"Processing {n_clips} clips  ×  {n_vars} variant(s)  =  "
+          f"{n_clips * n_vars} files total …")
     print("-" * 60)
 
     for it, batch in enumerate(loader):
-        video, joints3d, joints2d, K, box, meta = batch
-        B, T, C, H, W = video.shape
 
-        video = video.to(device, non_blocking=True)
+        # ------------------------------------------------------------------
+        # Normalise batch format.
+        # Plain   → batch = (video, j3d, j2d, K, box)   — wrap in list
+        # Augment → batch = [(video, j3d, j2d, K), ...]  — already a list
+        # ------------------------------------------------------------------
+        if args.augment:
+            variants_batch = batch          # list of N variant-batches
+            box_batch      = None           # box not available for augmented variants
+        else:
+            video, joints3d, joints2d, K, box = batch
+            variants_batch = [(video, joints3d, joints2d, K)]
+            box_batch      = box
 
-        # forward pass with torch.autocast for mixed precision
-        with torch.autocast(
-            device_type="cuda" if device.startswith("cuda") else "cpu",
-            dtype=torch.bfloat16 if device.startswith("cuda") else torch.float32,
-            enabled=device.startswith("cuda"),
-        ):
-            x = video.view(B * T, C, H, W).contiguous()  # contiguous for better perf
-            feats = backbone(x).flatten(1)
-            feats = feats.view(B, T, -1)
+        # Use the first variant to know the batch size
+        B = variants_batch[0][0].shape[0]
 
-        feats_to_save = feats.half() if args.save_fp16 else feats.float()
+        # ------------------------------------------------------------------
+        # Run ResNet on every variant
+        # ------------------------------------------------------------------
+        all_feats = []   # shape per variant: (B, T, 2048)
+        for v_idx, (v_video, v_j3d, v_j2d, v_K) in enumerate(variants_batch):
+            v_video = v_video.to(device, non_blocking=True)
+            Bv, T, C, H, W = v_video.shape
 
+            with torch.autocast(
+                device_type="cuda" if device.startswith("cuda") else "cpu",
+                dtype=torch.bfloat16 if device.startswith("cuda") else torch.float32,
+                enabled=device.startswith("cuda"),
+            ):
+                x     = v_video.view(Bv * T, C, H, W).contiguous()
+                feats = backbone(x).flatten(1).view(Bv, T, -1)
+
+            feats_cpu = (feats.half() if args.save_fp16 else feats.float()).cpu()
+            all_feats.append(feats_cpu)
+
+        # ------------------------------------------------------------------
+        # Save one .pt file per (clip × variant)
+        # ------------------------------------------------------------------
         for b in range(B):
             clip = ds.index[global_i]
             global_i += 1
 
-            rel_dir = Path(f"S{clip.subject}") / clip.action / f"{clip.cam}"
-            if rel_dir.exists():
-                print(f"Warning: Directory {rel_dir} already exists, skipping clip {clip} to avoid overwriting.")
-                continue
+            rel_dir  = Path(f"S{clip.subject}") / clip.action / f"{clip.cam}"
             save_dir = out_root / rel_dir
             save_dir.mkdir(parents=True, exist_ok=True)
 
-            save_path = save_dir / f"clip_{clip.start}_{clip.end}_fs{args.frame_skip}_len{args.seq_len}.pt"
+            for v_idx, (v_video, v_j3d, v_j2d, v_K) in enumerate(variants_batch):
+                aug_tag = f"_{AUG_NAMES[v_idx]}" if args.augment else ""
+                fname   = (f"clip_{clip.start}_{clip.end}"
+                           f"_fs{args.frame_skip}_len{args.seq_len}{aug_tag}.pt")
+                save_path = save_dir / fname
 
-            payload = {
-                "feats": feats_to_save[b].cpu(),
-                "joints3d": joints3d[b].cpu(),
-                "joints2d": joints2d[b].cpu(),
-                "K": K[b].cpu() if K.ndim >= 3 else K.cpu(),
-            }
-            save_meta = {
-                "subject": clip.subject,
-                "action": clip.action,
-                "cam": clip.cam,
-                "start": clip.start,
-                "end": clip.end,
-                "box": box[b].cpu() if box is not None else None,
-                "frame_skip": args.frame_skip,  
-                "seq_len": args.seq_len,
-            }
-            save_meta.update(_meta_at(meta, b))  # adds aug flags etc
-
-            payload = {**payload, "meta": save_meta}
-            
-            if writer:
+                payload = {
+                    "feats":    all_feats[v_idx][b],
+                    "joints3d": v_j3d[b].cpu(),
+                    "joints2d": v_j2d[b].cpu(),
+                    "K":        v_K[b].cpu() if v_K.ndim >= 3 else v_K.cpu(),
+                    "meta": {
+                        "subject":    clip.subject,
+                        "action":     clip.action,
+                        "cam":        clip.cam,
+                        "start":      clip.start,
+                        "end":        clip.end,
+                        "aug":        AUG_NAMES[v_idx] if args.augment else "orig",
+                        "box":        box_batch[b].cpu() if box_batch is not None else None,
+                        "seq_len":    args.seq_len,
+                        "frame_skip": args.frame_skip,
+                    },
+                }
                 writer.save(payload, save_path)
-            else:
-                torch.save(payload, save_path, _use_new_zipfile_serialization=False)
 
-        # Progress reporting
-        if global_i % 100 == 0 or global_i == len(ds):
-            dt = time.time() - t_last
+        # Progress
+        if global_i % 100 == 0 or global_i == n_clips:
+            dt            = time.time() - t_last
             clips_per_sec = 100 / dt if dt > 0 else 0
-            t_last = time.time()
-            progress = 100 * global_i / len(ds)
-            eta = (len(ds) - global_i) / clips_per_sec if clips_per_sec > 0 else 0
-            
-            print(f"[{progress:5.1f}%] {global_i:5d}/{len(ds)} clips | "
+            t_last        = time.time()
+            progress      = 100 * global_i / n_clips
+            eta           = (n_clips - global_i) / clips_per_sec if clips_per_sec > 0 else 0
+            print(f"[{progress:5.1f}%] {global_i:5d}/{n_clips} clips | "
                   f"{clips_per_sec:6.1f} clips/s | ETA: {eta:6.1f}s")
 
     if writer:

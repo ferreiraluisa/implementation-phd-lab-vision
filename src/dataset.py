@@ -413,13 +413,18 @@ class Human36MPreprocessedClips(Dataset):
         K        = _adjust_camera_after_crop_and_resize(ci.cam_params, box=box, out_size=self.resize)
 
         if self.augment:
-            if torch.rand(1).item() < self.aug_hflip_p:
-                video, joints3d, joints2d, K = _aug_hflip(video, joints3d, joints2d, K)
-                meta["aug_hflip"] = True
+            variants = []
+            variants.append((self.frame_tf(video), joints3d, joints2d, K, box))  # original (unaugmented) clip is always included as a variant
 
-            if torch.rand(1).item() < self.aug_temporal_reverse_p:
-                video, joints3d, joints2d = _aug_temporal_reverse(video, joints3d, joints2d)
-                meta["aug_trev"] = True
+            # 2. Horizontal flip — mirrors video + joints2d/3d + K
+            video_aux, j3d_aux, j2d_aux, K_aux = _aug_hflip(video, joints3d, joints2d, K)
+            variants.append((self.frame_tf(video_aux), j3d_aux, j2d_aux, K_aux, box))
+
+            # 3. Temporal reverse — flip clip in time
+            video_aux, j3d_aux, j2d_aux = _aug_temporal_reverse(video, joints3d, joints2d)
+            variants.append((self.frame_tf(video_aux), j3d_aux, j2d_aux, K, box))
+
+            return variants
 
         # Normalize video for ResNet (ImageNet mean/std)
         video = self.frame_tf(video)
@@ -430,4 +435,4 @@ class Human36MPreprocessedClips(Dataset):
         # joints2d (T, 17, 2)
         # K        (3, 3)
         # box      (4,)
-        return video, joints3d, joints2d, K, box, meta
+        return video, joints3d, joints2d, K, box
