@@ -55,7 +55,7 @@ class Human36MFeatureClips(Dataset):
         d = torch.load(self.files[idx], map_location="cpu", weights_only=True)
 
         feats = d["feats"]
-        joints3d = d["joints3d"] / 1000.0  # mm → m
+        joints3d = d["joints3d"]  # mm → m
         joints2d = d["joints2d"]
         K = d["K"]
 
