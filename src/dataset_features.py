@@ -58,7 +58,7 @@ class Human36MFeatureClips(Dataset):
         joints3d = d["joints3d"]  
         joints2d = d["joints2d"]
         K = d["K"]
-
+        print(joints3d.shape)
         root = joints3d[:, :, 0:1, :]      # (B, T, 1, 3)
         joints3d_norm = joints3d - root     # root-relative
         joints3d_norm = joints3d_norm / 1000.0  # mm -> meters
