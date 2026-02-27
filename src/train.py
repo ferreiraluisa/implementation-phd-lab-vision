@@ -321,11 +321,11 @@ def main():
     # load data
     train_set = Human36MFeatureClips(
         root=args.root,
-        subjects=[1, 6, 7, 8],
+        subjects=[1],
     )
     val_set = Human36MFeatureClips(
         root=args.root,
-        subjects=[5],
+        subjects=[1],
     )
 
     # DataLoader optimizations
