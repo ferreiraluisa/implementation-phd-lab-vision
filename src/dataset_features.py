@@ -24,6 +24,8 @@ class Human36MFeatureClips(Dataset):
 
         pattern = os.path.join(root, "S*", "*", "cam_*", "clip_*.pt")
         files = sorted(glob.glob(pattern))
+        print(f"Found {len(files)} cached clips under {pattern}")
+        print(f"  Example file: {files[0] if len(files) > 0 else 'None'}")
 
         if subjects is not None:
             keep = []
@@ -53,7 +55,7 @@ class Human36MFeatureClips(Dataset):
         d = torch.load(self.files[idx], map_location="cpu", weights_only=True)
 
         feats = d["feats"]
-        joints3d = d["joints3d"] / 1000.0  # mm → m
+        joints3d = d["joints3d"]  # mm → m
         joints2d = d["joints2d"]
         K = d["K"]
 
