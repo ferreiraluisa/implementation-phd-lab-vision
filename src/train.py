@@ -156,11 +156,10 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
             _phi, _phi_hat, joints_pred, _joints_hat = model.forward(feats, predict_future=False)
             # joints_pred: (B,T,J,3) assumed camera coordinates that match K
 
-            # 3D loss
-            l3d = (joints_pred - joints3d).pow(2).mean()
-            # Bone length loss: encourage consistent limb lengths across time
+        # 3D loss
+        l3d = (joints_pred - joints3d).pow(2).mean()
 
-            loss = l3d
+        loss = l3d
 
         timers["forward+loss"] += (time.time() - t_fwd)
 
@@ -351,7 +350,7 @@ def main():
         drop_last=False,
     )
 
-    model = PHD(latent_dim=1024, joints_num=JOINTS_NUM, number_blocks=2)
+    model = PHD(joints_num=JOINTS_NUM)
 
     # ----------------------------------
     # TRAINING PHASE 1 : freeze ResNet, train f_movie + f_3D
