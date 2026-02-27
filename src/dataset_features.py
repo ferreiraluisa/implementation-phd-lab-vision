@@ -24,6 +24,8 @@ class Human36MFeatureClips(Dataset):
 
         pattern = os.path.join(root, "S*", "*", "cam_*", "clip_*.pt")
         files = sorted(glob.glob(pattern))
+        print(f"Found {len(files)} cached clips under {pattern}")
+        print(f"  Example file: {files[0] if len(files) > 0 else 'None'}")
 
         if subjects is not None:
             keep = []
