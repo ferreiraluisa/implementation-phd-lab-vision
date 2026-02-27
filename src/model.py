@@ -82,6 +82,7 @@ class JointRegressor(nn.Module):
         super().__init__()
         self.joints_num = joints_num
         self.cam = 3 if camera_params else 0
+        self.camera_params = camera_params
         self.joints_dim = joints_num * 3
         self.out_dim = self.joints_dim + self.cam # 51D output + camera params (s, tx, ty) if needed
         self.iters = iters
