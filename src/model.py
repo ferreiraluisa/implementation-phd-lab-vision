@@ -95,13 +95,16 @@ class JointRegressor(nn.Module):
         )
 
         # initial pose (all zeros)
-        self.register_buffer("y0", torch.zeros(self.out_dim))
+        nn.init.xavier_uniform_(self.mlp[-1].weight, gain=0.01)
+        nn.init.zeros_(self.mlp[-1].bias)
+        # self.register_buffer("y0", torch.zeros(self.out_dim))
 
     def forward(self, phi):
         # phi: (B, T, 2048)
         B, T, D = phi.shape
         # y: (B, T, 51)
-        y = self.y0.view(1, 1, -1).expand(B, T, -1).contiguous()
+        # y = self.y0.view(1, 1, -1).expand(B, T, -1).contiguous()
+        y = torch.zeros(B, T, self.out_dim, device=phi.device) # initialize y to zeros
 
         # iterative error feedback, T = 3 iterations from the original HMR
         for _ in range(self.iters):
@@ -109,7 +112,13 @@ class JointRegressor(nn.Module):
             dy = self.mlp(inp)
             y = y + dy
 
-        return y.view(B, T, self.joints_num, 3)
+        joints = y[..., :self.joints_dim].view(B, T, self.joints_num, 3)
+
+        if self.camera_params:
+            cam = y[..., self.joints_dim:]  # (B, T, 3) -> (s, tx, ty)
+            return joints, cam
+
+        return joints
 
 
 # ============================================================

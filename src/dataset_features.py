@@ -55,9 +55,13 @@ class Human36MFeatureClips(Dataset):
         d = torch.load(self.files[idx], map_location="cpu", weights_only=True)
 
         feats = d["feats"]
-        joints3d = d["joints3d"]  # mm → m
+        joints3d = d["joints3d"]  
         joints2d = d["joints2d"]
         K = d["K"]
+
+        root = joints3d[:, :, 0:1, :]      # (B, T, 1, 3)
+        joints3d_norm = joints3d - root     # root-relative
+        joints3d_norm = joints3d_norm / 1000.0  # mm -> meters
 
         if self.test_set:
             meta = d.get("meta", None)
