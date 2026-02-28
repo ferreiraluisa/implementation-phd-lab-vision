@@ -109,6 +109,30 @@ def project_with_K_torch(P_cam, K, eps=1e-6):
     return uv
 
 
+# ============================================================
+# OPTIMISER HELPER  (call this instead of optim.AdamW(model.parameters()))
+# ============================================================
+# [REGULARISATION] applying L2 weight decay to GroupNorm/LayerNorm scale parameters and bias
+# terms is harmful — those are not weight matrices and shouldn't be penalised. This helper
+# splits parameters into two groups and sets weight_decay=0 for norms and biases.
+# use this instead of: AdamW(model.parameters(), weight_decay=...)
+def build_optimizer(model, lr=1e-4, weight_decay=1e-4):
+    decay, no_decay = [], []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        is_norm = any(nd in name for nd in ("gn1.", "gn2.", "norm", "LayerNorm"))
+        is_bias = name.endswith(".bias")
+        if is_norm or is_bias:
+            no_decay.append(param)
+        else:
+            decay.append(param)
+
+    return torch.optim.AdamW(
+        [{"params": decay,    "weight_decay": weight_decay},
+         {"params": no_decay, "weight_decay": 0.0}],
+        lr=lr,
+    )
 
 def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bone: float = 1, log_every: int = 500):
     model.train()
@@ -376,7 +400,8 @@ def main():
     trainable = [p for p in model.parameters() if p.requires_grad]
     if len(trainable) == 0:
         raise RuntimeError("No trainable parameters found. Did you accidentally freeze everything?")
-    optim = torch.optim.AdamW(trainable, lr=args.lr, weight_decay=5e-2)
+    raw_model = model.module if isinstance(model, nn.DataParallel) else model
+    optim = build_optimizer(raw_model, lr=args.lr, weight_decay=5e-2)
 
     use_cuda = device.type == "cuda"
     scaler = torch.amp.GradScaler('cuda', enabled=use_cuda)
