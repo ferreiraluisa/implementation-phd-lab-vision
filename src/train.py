@@ -247,6 +247,7 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
 
     total_loss = 0.0
     total_l3d = 0.0
+    total_lbone = 0.0
     total_mpjpe = 0.0
     n_batches = 0
 
@@ -277,11 +278,12 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
         timers["forward"] += (time.time() - t_fwd)
 
         l3d = (joints_pred - joints3d).pow(2).mean()
-
-        loss = l3d 
+        lbone = bone_length_loss(joints_pred, joints3d)
+        loss = l3d + lbone
 
         total_loss += float(loss.item())
         total_l3d += float(l3d.item())
+        total_lbone += float(lbone.item())
         total_mpjpe += mpjpe_m(joints_pred, joints3d)
         n_batches += 1
 
