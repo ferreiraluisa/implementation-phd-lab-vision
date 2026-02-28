@@ -34,13 +34,14 @@ class CausalConv1d(nn.Module):
 
 class ResidualBlock(nn.Module):
     # group norm + relu + causal conv1d + group norm + relu + causal conv1d + skip connection
-    def __init__(self, channels, groups=32):
+    def __init__(self, channels, groups=32, dropout=0.2):
         super().__init__()
         self.gn1 = nn.GroupNorm(groups, channels)
         self.relu = nn.ReLU(inplace=True)
         self.conv1 = CausalConv1d(channels, channels, kernel_size=3)
         self.gn2 = nn.GroupNorm(groups, channels)
         self.conv2 = CausalConv1d(channels, channels, kernel_size=3)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         residual = x
@@ -49,6 +50,7 @@ class ResidualBlock(nn.Module):
         x = self.conv1(x)
         x = self.gn2(x)
         x = self.relu(x)
+        x = self.dropout(x)
         x = self.conv2(x)
         return x + residual
 
