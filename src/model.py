@@ -39,19 +39,21 @@ class ResidualBlock(nn.Module):
         self.gn1 = nn.GroupNorm(groups, channels)
         self.relu = nn.ReLU(inplace=True)
         self.conv1 = CausalConv1d(channels, channels, kernel_size=3)
+        self.dropout1 = nn.Dropout1d(dropout)
         self.gn2 = nn.GroupNorm(groups, channels)
         self.conv2 = CausalConv1d(channels, channels, kernel_size=3)
-        self.dropout = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout1d(dropout)
 
     def forward(self, x):
         residual = x
         x = self.gn1(x)
         x = self.relu(x)
         x = self.conv1(x)
+        x = self.dropout1(x)
         x = self.gn2(x)
         x = self.relu(x)
-        x = self.dropout(x)
         x = self.conv2(x)
+        x = self.dropout2(x)
         return x + residual
 
 
@@ -85,7 +87,9 @@ class JointRegressor(nn.Module):
         self.joints_num = joints_num
         self.cam = 3 if camera_params else 0
         self.out_dim = joints_num * 3 + self.cam # 51D output + camera params (s, tx, ty) if needed
-        self.iters = iters
+        # self.iters = iters
+        # PHASE 1 
+        self.iters = 1
 
         self.mlp = nn.Sequential(
             nn.Linear(latent_dim + self.out_dim, 1024),

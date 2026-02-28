@@ -376,7 +376,7 @@ def main():
     trainable = [p for p in model.parameters() if p.requires_grad]
     if len(trainable) == 0:
         raise RuntimeError("No trainable parameters found. Did you accidentally freeze everything?")
-    optim = torch.optim.AdamW(trainable, lr=args.lr, weight_decay=1e-2)
+    optim = torch.optim.AdamW(trainable, lr=args.lr, weight_decay=5e-2)
 
     use_cuda = device.type == "cuda"
     scaler = torch.amp.GradScaler('cuda', enabled=use_cuda)
