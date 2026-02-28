@@ -158,6 +158,8 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
 
         # 3D loss
         l3d = (joints_pred - joints3d).pow(2).mean()
+        print("GT mean abs:", joints3d.abs().mean())
+        print("Pred mean abs:", joints_pred.abs().mean())
 
         loss = l3d
 
