@@ -168,6 +168,7 @@ class PHDFor3DJoints(nn.Module):
 
         # [REGULARISATION] each net gets its own input projection (in_dim arg) so f_movie and
         # f_AR learn independent feature subspaces rather than co-adapting to the same raw feats.
+        self.linear = nn.Linear(2048, latent_dim)
         self.f_movie = CausalTemporalNet(latent_dim)
         self.f_AR    = CausalTemporalNet(latent_dim)
         self.f_3D    = JointRegressor(latent_dim, joints_num, dropout=reg_dropout)
@@ -181,19 +182,11 @@ class PHDFor3DJoints(nn.Module):
     #     feats = feats.flatten(1)
     #     return feats.view(B, T, -1)
 
-    def _add_feat_noise(self, feats):
-        # [REGULARISATION] light Gaussian noise in latent space during training.
-        # acts like continuous stochastic perturbation of backbone features,
-        # making the temporal nets more robust to backbone feature variance.
-        if self.training and self.feat_noise_std > 0:
-            feats = feats + torch.randn_like(feats) * self.feat_noise_std
-        return feats
-
     # def forward(self, video, predict_future=False):
     def forward(self, feats, predict_future=False):
         # feats = self.extract_features(video) # preprocessed features input in preprocess_resnet_features.py
         # feats: (B, T, 2048)
-        feats = self._add_feat_noise(feats)
+        feats = self.linear(feats)  # (B, T, D)
 
         phi = self.f_movie(feats) # temporal causal encoder f_movie
 
