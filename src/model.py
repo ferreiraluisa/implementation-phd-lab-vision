@@ -34,12 +34,11 @@ class CausalConv1d(nn.Module):
 
 class ResidualBlock(nn.Module):
     # group norm + relu + causal conv1d + group norm + relu + causal conv1d + skip connection
-    def __init__(self, channels, groups=32, dropout=0.5):
+    def __init__(self, channels, groups=32):
         super().__init__()
         self.gn1 = nn.GroupNorm(groups, channels)
         self.relu = nn.ReLU(inplace=True)
         self.conv1 = CausalConv1d(channels, channels, kernel_size=3)
-        self.drop = nn.Dropout(dropout)
         self.gn2 = nn.GroupNorm(groups, channels)
         self.conv2 = CausalConv1d(channels, channels, kernel_size=3)
 
@@ -48,11 +47,9 @@ class ResidualBlock(nn.Module):
         x = self.gn1(x)
         x = self.relu(x)
         x = self.conv1(x)
-        x = self.drop(x)
         x = self.gn2(x)
         x = self.relu(x)
         x = self.conv2(x)
-
         return x + residual
 
 
@@ -94,7 +91,6 @@ class JointRegressor(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(1024, 1024),
             nn.ReLU(inplace=True),
-            # nn.Dropout(dropout),          # 19/02 added DROPOUT LAYER, and remove it 19/02
             nn.Linear(1024, self.out_dim),
         )
 
@@ -125,7 +121,7 @@ class JointRegressor(nn.Module):
 # third, the autoregressive predictor fAR predicts the next latent movie strip based on previous ones
 # finally, the joint regressor f3D takes both the latent movie strips and the predicted ones to output the 3D joint positions.
 class PHDFor3DJoints(nn.Module):
-    def __init__(self, latent_dim=2048, joints_num=17, number_blocks=3):
+    def __init__(self, latent_dim=2048, joints_num=17, freeze_backbone=True):
         super().__init__()
 
         # ----------------------------------------------------
@@ -136,14 +132,15 @@ class PHDFor3DJoints(nn.Module):
         # self.backbone = nn.Sequential(*list(resnet.children())[:-1])
         # commented out bc we don't want to extract features here, only in preprocess_resnet_features.py
 
+        # if freeze_backbone:
+        #     for p in self.backbone.parameters():
+        #         p.requires_grad = False
 
         self.latent_dim = latent_dim
 
-        self.f_movie = CausalTemporalNet(latent_dim, num_blocks=number_blocks)
+        self.f_movie = CausalTemporalNet(latent_dim)
         self.f_AR = CausalTemporalNet(latent_dim)
         self.f_3D = JointRegressor(latent_dim, joints_num)
-        # reduce model capacity
-        self.input_proj = nn.Linear(2048, latent_dim)
 
     # @torch.no_grad() # resnet must not be trained
     # def extract_features(self, video):
@@ -158,7 +155,6 @@ class PHDFor3DJoints(nn.Module):
     def forward(self, feats, predict_future=False):
         # feats = self.extract_features(video) # preprocessed features input in preprocess_resnet_features.py
         # feats: (B, T, 2048)
-        feats = self.input_proj(feats) # reduce dimensionality to 512 for faster training and less overfitting
         phi = self.f_movie(feats) # temporal causal encoder f_movie
 
         ar_out = self.f_AR(phi) # autoregressive predictor f_AR

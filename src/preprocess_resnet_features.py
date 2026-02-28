@@ -53,6 +53,19 @@ class AsyncFileWriter:
         self.queue.put(None)
         self.thread.join()
 
+def _meta_at(meta_batch, b: int):
+    # meta_batch is a dict produced by default_collate: {key: list/tensor of length B}
+    out = {}
+    for k, v in meta_batch.items():
+        if torch.is_tensor(v):
+            # tensor with shape (B, ...) -> select b
+            vb = v[b]
+            out[k] = vb.item() if vb.numel() == 1 else vb
+        else:
+            # list/tuple -> select b
+            out[k] = v[b]
+    return out
+
 
 @torch.no_grad()
 def main():
@@ -67,6 +80,7 @@ def main():
     parser.add_argument("--subjects", type=int, nargs="+", default=[1, 5, 6, 7, 8, 9, 11])
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--save-fp16", action="store_true", help="Store feats as float16")
+    parser.add_argument("--augment", action="store_true", help="enable online data augmentation")
     args = parser.parse_args()
 
     if args.device.startswith("cuda") and not torch.cuda.is_available():
@@ -95,6 +109,7 @@ def main():
         frame_skip=args.frame_skip,
         stride=args.stride,
         max_clips=None,
+        augment=args.augment,  
     )
 
     loader = DataLoader(
@@ -152,7 +167,7 @@ def main():
     print("-" * 60)
 
     for it, batch in enumerate(loader):
-        video, joints3d, joints2d, K, box = batch
+        video, joints3d, joints2d, K, box, meta = batch
         B, T, C, H, W = video.shape
 
         video = video.to(device, non_blocking=True)
@@ -187,17 +202,20 @@ def main():
                 "joints3d": joints3d[b].cpu(),
                 "joints2d": joints2d[b].cpu(),
                 "K": K[b].cpu() if K.ndim >= 3 else K.cpu(),
-                "meta": {
-                    "subject": clip.subject,
-                    "action": clip.action,
-                    "cam": clip.cam,
-                    "start": clip.start,
-                    "end": clip.end,
-                    "box": box[b].cpu() if box is not None else None,
-                    "seq_len": args.seq_len,
-                    "frame_skip": args.frame_skip,
-                }
             }
+            save_meta = {
+                "subject": clip.subject,
+                "action": clip.action,
+                "cam": clip.cam,
+                "start": clip.start,
+                "end": clip.end,
+                "box": box[b].cpu() if box is not None else None,
+                "frame_skip": args.frame_skip,  
+                "seq_len": args.seq_len,
+            }
+            save_meta.update(_meta_at(meta, b))  # adds aug flags etc
+
+            payload = {**payload, "meta": save_meta}
             
             if writer:
                 writer.save(payload, save_path)
