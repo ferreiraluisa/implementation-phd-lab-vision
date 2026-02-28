@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --partition=A40devel    # GPU partition
-#SBATCH --time=1:00:00           # max runtime (HH:MM:SS)
-#SBATCH --gpus=1                 # number of GPUs
+#SBATCH --partition=A40short    # GPU partition
+#SBATCH --time=8:00:00           # max runtime (HH:MM:SS)
+#SBATCH --gpus=2                 # number of GPUs
 #SBATCH --ntasks=1               # number of CPU tasks
 #SBATCH --output=logs/train%j.out
 #SBATCH --error=logs/train%j.err
@@ -16,8 +16,8 @@ nvidia-smi -l 1800 &
 
 python -u src/train.py \
   --seq-len 40 \
-  --root /home/s26ldeso/Human3.6_teste \
-  --batch-size 1 \
+  --root /home/s26ldeso/Human3.6M_resnet_data_off_aug \
+  --batch-size 16 \
   --lr 1e-4 \
   --epochs 50 \
-  --outdir runs_one_sample/phase1
+  --outdir runs_root_relative_2/phase1
