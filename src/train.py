@@ -343,6 +343,9 @@ def main():
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
+        pin_memory=True,
+        persistent_workers=(args.num_workers > 0),
+        prefetch_factor=2 if args.num_workers > 0 else None,
     )
     val_loader = DataLoader(
         val_set,
@@ -350,6 +353,9 @@ def main():
         shuffle=False,
         num_workers=max(1, args.num_workers // 2),
         drop_last=False,
+        pin_memory=True,
+        persistent_workers=(args.num_workers > 0),
+        prefetch_factor=2 if args.num_workers > 0 else None,
     )
 
     model = PHD(joints_num=JOINTS_NUM)
