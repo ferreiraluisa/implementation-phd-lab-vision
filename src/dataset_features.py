@@ -57,7 +57,7 @@ class Human36MFeatureClips(Dataset):
         joints2d = d["joints2d"]
         K = d["K"]
 
-        root = joints3d[:, :, 0:1, :]      # (T, 1, 3)
+        root = joints3d[:, 0:1, :]       # (T, 1, 3)
         joints3d_norm = joints3d - root     # root-relative
 
         if self.test_set:
