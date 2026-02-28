@@ -65,6 +65,6 @@ class Human36MFeatureClips(Dataset):
 
         if self.test_set:
             meta = d.get("meta", None)
-            return feats, joints3d, joints2d, K, meta
+            return feats, joints3d_norm, joints2d, K, meta
 
         return feats, joints3d_norm, joints2d, K
