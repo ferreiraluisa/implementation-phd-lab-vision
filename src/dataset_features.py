@@ -46,6 +46,11 @@ class Human36MFeatureClips(Dataset):
         if len(files) == 0:
             raise RuntimeError(f"No cached clips found under {root}")
 
+        files = [
+            f for f in files
+            if not f.endswith("_hflip.pt")
+            and not f.endswith("_temp_rev.pt")
+        ]
         self.files = files
 
     def __len__(self):
