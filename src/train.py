@@ -55,11 +55,6 @@ def bone_length_loss(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
     gt_len   = torch.norm(gt_bones,   dim=-1)          # (B,T,E)
     return F.mse_loss(pred_len, gt_len)
 
-def velocity_loss(pred, gt):
-    pred_vel = pred[:, 1:] - pred[:, :-1]
-    gt_vel   = gt[:, 1:] - gt[:, :-1]
-    return F.mse_loss(pred_vel, gt_vel)
-
 
 
 def save_checkpoint(path: str, model: nn.Module, optim: torch.optim.Optimizer,
@@ -114,32 +109,8 @@ def project_with_K_torch(P_cam, K, eps=1e-6):
     return uv
 
 
-# ============================================================
-# OPTIMISER HELPER  (call this instead of optim.AdamW(model.parameters()))
-# ============================================================
-# [REGULARISATION] applying L2 weight decay to GroupNorm/LayerNorm scale parameters and bias
-# terms is harmful — those are not weight matrices and shouldn't be penalised. This helper
-# splits parameters into two groups and sets weight_decay=0 for norms and biases.
-# use this instead of: AdamW(model.parameters(), weight_decay=...)
-def build_optimizer(model, lr=1e-4, weight_decay=1e-3):
-    decay, no_decay = [], []
-    for name, param in model.named_parameters():
-        if not param.requires_grad:
-            continue
-        is_norm = any(nd in name for nd in ("gn1.", "gn2.", "norm", "LayerNorm"))
-        is_bias = name.endswith(".bias")
-        if is_norm or is_bias:
-            no_decay.append(param)
-        else:
-            decay.append(param)
 
-    return torch.optim.AdamW(
-        [{"params": decay,    "weight_decay": weight_decay},
-         {"params": no_decay, "weight_decay": 0.0}],
-        lr=lr,
-    )
-
-def train(model, loader, optim, scheduler, scaler, device, lambda_vel: float = 1, lambda_bone: float = 1, log_every: int = 500):
+def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bone: float = 1, log_every: int = 500):
     model.train()
     epoch_start = time.time()
 
@@ -188,10 +159,8 @@ def train(model, loader, optim, scheduler, scaler, device, lambda_vel: float = 1
             # 3D loss
             l3d = (joints_pred - joints3d).pow(2).mean()
             # Bone length loss: encourage consistent limb lengths across time
-            lbone = bone_length_loss(joints_pred, joints3d)
-            # Velocity loss: encourage consistent motion dynamics
-            lvel = velocity_loss(joints_pred, joints3d)
-            loss = l3d + 0.5 * lbone + 1.0 * lvel
+
+            loss = l3d
 
         timers["forward+loss"] += (time.time() - t_fwd)
 
@@ -208,8 +177,6 @@ def train(model, loader, optim, scheduler, scaler, device, lambda_vel: float = 1
             loss.backward()
             optim.step()
 
-        scheduler.step()
-
         timers["backward"] += (time.time() - t_bwd)
 
         # --------------------
@@ -217,8 +184,6 @@ def train(model, loader, optim, scheduler, scaler, device, lambda_vel: float = 1
         # --------------------
         running_loss += float(loss.item())
         running_l3d += float(l3d.item())
-        running_lvel += float(lvel.item())
-        running_lbone += float(lbone.item())
         running_mpjpe += mpjpe_m(joints_pred.detach(), joints3d.detach())
         n_batches += 1
 
@@ -229,8 +194,8 @@ def train(model, loader, optim, scheduler, scaler, device, lambda_vel: float = 1
         if log_every > 0 and (it + 1) % log_every == 0:
             dt_epoch = time.time() - epoch_start
             print(
-                f"[3D + bone + velocity]  iter {it+1:05d}/{len(loader):05d} | "
-                f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f}, vel {running_lvel/n_batches:.6f}, bone {running_lbone/n_batches:.6f}) | "
+                f"[3D]  iter {it+1:05d}/{len(loader):05d} | "
+                f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f}) | "
                 f"mpjpe {running_mpjpe/n_batches:.3f} | "
                 f"time/iter {timers['iter']/n_batches:.4f}s | "
                 f"epoch {dt_epoch:.1f}s"
@@ -255,8 +220,6 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
 
     total_loss = 0.0
     total_l3d = 0.0
-    total_lbone = 0.0
-    total_lvel = 0.0
     total_mpjpe = 0.0
     n_batches = 0
 
@@ -287,14 +250,11 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
         timers["forward"] += (time.time() - t_fwd)
 
         l3d = (joints_pred - joints3d).pow(2).mean()
-        lbone = bone_length_loss(joints_pred, joints3d)
-        lvel = velocity_loss(joints_pred, joints3d)
-        loss = l3d + 0.5 * lbone + 1.0 * lvel
+
+        loss = l3d 
 
         total_loss += float(loss.item())
         total_l3d += float(l3d.item())
-        total_lbone += float(lbone.item())
-        total_lvel += float(lvel.item())
         total_mpjpe += mpjpe_m(joints_pred, joints3d)
         n_batches += 1
 
@@ -382,9 +342,6 @@ def main():
         shuffle=True,
         num_workers=args.num_workers,
         drop_last=True,
-        pin_memory=True,
-        prefetch_factor=4 if args.num_workers > 0 else None,
-        persistent_workers=True if args.num_workers > 0 else False,
     )
     val_loader = DataLoader(
         val_set,
@@ -392,9 +349,6 @@ def main():
         shuffle=False,
         num_workers=max(1, args.num_workers // 2),
         drop_last=False,
-        pin_memory=True,
-        prefetch_factor=2 if args.num_workers > 0 else None,
-        persistent_workers=True if args.num_workers > 0 else False,
     )
 
     model = PHD(joints_num=JOINTS_NUM)
@@ -416,19 +370,11 @@ def main():
     trainable = [p for p in model.parameters() if p.requires_grad]
     if len(trainable) == 0:
         raise RuntimeError("No trainable parameters found. Did you accidentally freeze everything?")
-    raw_model = model.module if isinstance(model, nn.DataParallel) else model
-    optim = build_optimizer(raw_model, lr=args.lr, weight_decay=5e-3)
+    optim = torch.optim.AdamW(trainable, lr=args.lr, weight_decay=1e-2)
 
     use_cuda = device.type == "cuda"
     scaler = torch.amp.GradScaler('cuda', enabled=use_cuda)
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-    optim,
-    max_lr=args.lr,
-    steps_per_epoch=len(train_loader),
-    epochs=args.epochs,
-    pct_start=0.1,          # 10% warmup
-    anneal_strategy='cos',
-    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=args.epochs)
 
     start_epoch = 0
     best_val = float("inf")
@@ -458,13 +404,14 @@ def main():
         t_epoch = time.time()
 
         tr_loss, tr_mpjpe = train(
-            model, train_loader, optim, scheduler, scaler, device,
+            model, train_loader, optim, scaler, device,
             log_every=args.log_every
         )
         va_loss, va_mpjpe, va_l3d, va_l2d = evaluate(
             model, val_loader, device
         )
 
+        scheduler.step()
 
         print(f"Train: loss={tr_loss:.6f} | mpjpe={tr_mpjpe:.3f}")
         print(f"Val:   loss={va_loss:.6f} (3d {va_l3d:.6f} + {args.lambda_2d:.3g}*2d {va_l2d:.6f}) | mpjpe={va_mpjpe:.3f}")
