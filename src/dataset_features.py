@@ -22,7 +22,7 @@ class Human36MFeatureClips(Dataset):
         self.root = root
         self.test_set = test_set   # <-- store flag
 
-        pattern = os.path.join(root, "S*", "*", "cam_*", "clip_*.pt")
+        pattern = os.path.join(root, "S*", "*", "cam_*", "clip_*_.pt")
         files = sorted(glob.glob(pattern))
         print(f"Found {len(files)} cached clips under {pattern}")
         print(f"  Example file: {files[0] if len(files) > 0 else 'None'}")
@@ -58,10 +58,10 @@ class Human36MFeatureClips(Dataset):
         joints3d = d["joints3d"]  
         joints2d = d["joints2d"]
         K = d["K"]
-        print(joints3d.shape)
+        #print(joints3d.shape)
         root = joints3d[:, 0:1, :]          # (T, 1, 3)
         joints3d_norm = joints3d - root     # root-relative
-        joints3d_norm = joints3d_norm / 1000.0  # mm -> meters
+        joints3d_norm = joints3d_norm / 1000.0   # mm -> meters
 
         if self.test_set:
             meta = d.get("meta", None)
