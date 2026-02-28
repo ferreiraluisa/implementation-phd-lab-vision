@@ -168,12 +168,8 @@ class PHDFor3DJoints(nn.Module):
 
         # [REGULARISATION] each net gets its own input projection (in_dim arg) so f_movie and
         # f_AR learn independent feature subspaces rather than co-adapting to the same raw feats.
-        self.f_movie = CausalTemporalNet(latent_dim, latent_dim,
-                                         drop_prob=drop_prob,
-                                         stochastic_depth_prob=sd_prob)
-        self.f_AR    = CausalTemporalNet(latent_dim, latent_dim,
-                                         drop_prob=drop_prob,
-                                         stochastic_depth_prob=sd_prob)
+        self.f_movie = CausalTemporalNet(latent_dim)
+        self.f_AR    = CausalTemporalNet(latent_dim)
         self.f_3D    = JointRegressor(latent_dim, joints_num, dropout=reg_dropout)
 
     # @torch.no_grad() # resnet must not be trained
