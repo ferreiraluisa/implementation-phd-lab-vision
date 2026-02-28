@@ -38,7 +38,7 @@ class ResidualBlock(nn.Module):
     # standard Dropout zeroes individual scalars which is too fine-grained for conv feature maps,
     # since adjacent time-steps are correlated. Dropout1d drops entire channels at once,
     # making it a much stronger regulariser for 1D conv sequences.
-    def __init__(self, channels, groups=32, drop_prob=0.1):
+    def __init__(self, channels, groups=32, drop_prob=0.05):
         super().__init__()
         self.gn1   = nn.GroupNorm(groups, channels)
         self.conv1 = CausalConv1d(channels, channels, kernel_size=3)
@@ -66,37 +66,14 @@ class ResidualBlock(nn.Module):
 # from paper: "Predicting 3D Human Dynamics from Video":
 # 3 residual blocks, each with kernel size 3, resulting in a receptive field of 13 frames.
 #
-# [REGULARISATION] added stochastic depth: each residual block is randomly skipped during
-# training with probability `stochastic_depth_prob`, forcing the network not to rely on any
-# single block. Probability increases linearly across blocks (later blocks dropped more often).
-#
-# [REGULARISATION] added a separate input linear projection for each CausalTemporalNet instance
-# (f_movie and f_AR) so the two networks learn independent feature subspaces rather than
-# co-adapting to the same raw backbone features.
 class CausalTemporalNet(nn.Module):
-    def __init__(self, in_dim=2048, latent_dim=2048, num_blocks=3,
-                 drop_prob=0.1, stochastic_depth_prob=0.1):
+    def __init__(self, latent_dim=2048, num_blocks=3):
         super().__init__()
-        self.proj = nn.Linear(in_dim, latent_dim) if in_dim != latent_dim else nn.Identity()
-        self.blocks = nn.ModuleList(
-            [ResidualBlock(latent_dim, drop_prob=drop_prob) for _ in range(num_blocks)]
-        )
-        # per-block drop probability for stochastic depth, linearly increasing
-        self.sd_probs = [stochastic_depth_prob * (i / max(num_blocks - 1, 1))
-                         for i in range(num_blocks)]
-
-    def _stochastic_depth(self, x, block, drop_prob):
-        if not self.training or drop_prob == 0.0:
-            return block(x)
-        # Bernoulli gate: keep the whole block output or fall back to identity
-        keep = torch.rand(1, device=x.device).item() > drop_prob
-        return block(x) if keep else x
+        self.blocks = nn.Sequential(*[ResidualBlock(latent_dim) for _ in range(num_blocks)])
 
     def forward(self, x):
-        x = self.proj(x)
         x = x.permute(0, 2, 1)   # (B,D,T)
-        for block, prob in zip(self.blocks, self.sd_probs):
-            x = self._stochastic_depth(x, block, prob)
+        x = self.blocks(x)
         return x.permute(0, 2, 1)  # (B,T,D)
 
 # ============================================================
@@ -116,7 +93,9 @@ class JointRegressor(nn.Module):
         self.joints_num = joints_num
         self.cam = 3 if camera_params else 0
         self.out_dim = joints_num * 3 + self.cam # 51D output + camera params (s, tx, ty) if needed
-        self.iters = iters
+        # self.iters = iters
+        # just for training 1st phase
+        self.iters = 1
 
         self.mlp = nn.Sequential(
             nn.Linear(latent_dim + self.out_dim, 1024),
@@ -165,11 +144,11 @@ class JointRegressor(nn.Module):
 #   5. Gaussian feature noise injection during training (cheap latent-space augmentation).
 #   6. build_optimizer() below for correct weight-decay param groups.
 class PHDFor3DJoints(nn.Module):
-    def __init__(self, latent_dim=2048, joints_num=17, freeze_backbone=True,
-                 feat_noise_std=0.01,   # std of Gaussian noise added to backbone feats during training
+    def __init__(self, latent_dim=1024, joints_num=17, freeze_backbone=True,
+                 feat_noise_std=0.005,   # std of Gaussian noise added to backbone feats during training
                  drop_prob=0.1,         # channel dropout inside residual blocks
                  sd_prob=0.1,           # stochastic depth probability per block
-                 reg_dropout=0.3):      # dropout inside joint regressor
+                 reg_dropout=0.2):      # dropout inside joint regressor
         super().__init__()
 
         # ----------------------------------------------------

@@ -55,6 +55,11 @@ def bone_length_loss(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
     gt_len   = torch.norm(gt_bones,   dim=-1)          # (B,T,E)
     return F.mse_loss(pred_len, gt_len)
 
+def velocity_loss(pred, gt):
+    pred_vel = pred[:, 1:] - pred[:, :-1]
+    gt_vel   = gt[:, 1:] - gt[:, :-1]
+    return F.mse_loss(pred_vel, gt_vel)
+
 
 
 def save_checkpoint(path: str, model: nn.Module, optim: torch.optim.Optimizer,
@@ -184,7 +189,9 @@ def train(model, loader, optim, scheduler, scaler, device, lambda_vel: float = 1
             l3d = (joints_pred - joints3d).pow(2).mean()
             # Bone length loss: encourage consistent limb lengths across time
             lbone = bone_length_loss(joints_pred, joints3d)
-            loss = l3d + lbone
+            # Velocity loss: encourage consistent motion dynamics
+            lvel = velocity_loss(joints_pred, joints3d)
+            loss = l3d + 0.5 * lbone + 1.0 * lvel
 
         timers["forward+loss"] += (time.time() - t_fwd)
 
@@ -210,6 +217,7 @@ def train(model, loader, optim, scheduler, scaler, device, lambda_vel: float = 1
         # --------------------
         running_loss += float(loss.item())
         running_l3d += float(l3d.item())
+        running_lvel += float(lvel.item())
         running_lbone += float(lbone.item())
         running_mpjpe += mpjpe_m(joints_pred.detach(), joints3d.detach())
         n_batches += 1
@@ -221,8 +229,8 @@ def train(model, loader, optim, scheduler, scaler, device, lambda_vel: float = 1
         if log_every > 0 and (it + 1) % log_every == 0:
             dt_epoch = time.time() - epoch_start
             print(
-                f"[3D]  iter {it+1:05d}/{len(loader):05d} | "
-                f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f}) | "
+                f"[3D + bone + velocity]  iter {it+1:05d}/{len(loader):05d} | "
+                f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f}, vel {running_lvel/n_batches:.6f}, bone {running_lbone/n_batches:.6f}) | "
                 f"mpjpe {running_mpjpe/n_batches:.3f} | "
                 f"time/iter {timers['iter']/n_batches:.4f}s | "
                 f"epoch {dt_epoch:.1f}s"
@@ -248,6 +256,7 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
     total_loss = 0.0
     total_l3d = 0.0
     total_lbone = 0.0
+    total_lvel = 0.0
     total_mpjpe = 0.0
     n_batches = 0
 
@@ -279,11 +288,13 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
 
         l3d = (joints_pred - joints3d).pow(2).mean()
         lbone = bone_length_loss(joints_pred, joints3d)
-        loss = l3d + lbone
+        lvel = velocity_loss(joints_pred, joints3d)
+        loss = l3d + 0.5 * lbone + 1.0 * lvel
 
         total_loss += float(loss.item())
         total_l3d += float(l3d.item())
         total_lbone += float(lbone.item())
+        total_lvel += float(lvel.item())
         total_mpjpe += mpjpe_m(joints_pred, joints3d)
         n_batches += 1
 
