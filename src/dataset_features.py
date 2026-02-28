@@ -67,4 +67,4 @@ class Human36MFeatureClips(Dataset):
             meta = d.get("meta", None)
             return feats, joints3d, joints2d, K, meta
 
-        return feats, joints3d, joints2d, K
+        return feats, joints3d_norm, joints2d, K
