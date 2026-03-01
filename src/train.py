@@ -236,7 +236,7 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
             # Velocity loss: encourage smooth motion by matching joint velocities
             lvel = velocity_loss(joints_pred, joints3d)
 
-            loss = l3d + 0.5* lbone + 1 * lvel
+            loss = l3d 
 
         timers["forward+loss"] += (time.time() - t_fwd)
 
@@ -272,8 +272,8 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
         if log_every > 0 and (it + 1) % log_every == 0:
             dt_epoch = time.time() - epoch_start
             print(
-                f"[3D + bone + vel]  iter {it+1:05d}/{len(loader):05d} | "
-                f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f}, bone {running_lbone/n_batches:.6f}, vel {running_lvel/n_batches:.6f}) | "
+                f"[3D ]  iter {it+1:05d}/{len(loader):05d} | "
+                f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f}) | "
                 f"mpjpe {running_mpjpe/n_batches:.3f} | "
                 f"time/iter {timers['iter']/n_batches:.4f}s | "
                 f"epoch {dt_epoch:.1f}s"
@@ -338,7 +338,7 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
         lbone = bone_length_loss(joints_pred, joints3d)
         lvel = velocity_loss(joints_pred, joints3d)
 
-        loss = l3d + 0.5 * lbone + 1.0 * lvel
+        loss = l3d 
 
         total_loss += float(loss.item())
         total_l3d += float(l3d.item())
