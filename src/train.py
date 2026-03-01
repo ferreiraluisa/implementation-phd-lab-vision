@@ -283,7 +283,7 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
     print(f"  total epoch:     {epoch_time:.2f}s")
     print(f"  avg iter time:   {timers['iter']/max(n_batches,1):.4f}s\n")
 
-    return running_loss / max(n_batches, 1), running_mpjpe / max(n_batches, 1)
+    return running_loss / max(n_batches, 1), running_mpjpe / max(n_batches, 1), running_pa_mpjpe / max(n_batches, 1)
 
 
 @torch.no_grad()
