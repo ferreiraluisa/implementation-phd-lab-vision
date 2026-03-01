@@ -136,14 +136,14 @@ def procrustes_align_batch(pred: torch.Tensor, gt: torch.Tensor, eps: float = 1e
 
 
 @torch.no_grad()
-def pa_mpjpe(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
-    """
-    PA-MPJPE (Protocol #2): MPJPE after Procrustes alignment.
-    Args:
-        pred, gt: (B, J, 3)
-    Returns:
-        scalar tensor (mean over batch and joints)
-    """
+def pa_mpjpe(pred, gt):
+    # pred, gt: (B,T,J,3) or (B,J,3)
+
+    if pred.ndim == 4:
+        B, T, J, C = pred.shape
+        pred = pred.reshape(B * T, J, C)
+        gt   = gt.reshape(B * T, J, C)
+
     pred_aligned = procrustes_align_batch(pred, gt)
     return torch.norm(pred_aligned - gt, dim=-1).mean()
 
