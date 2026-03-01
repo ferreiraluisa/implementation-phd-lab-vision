@@ -428,7 +428,7 @@ def main():
         drop_last=False,
     )
 
-    model = PHD(joints_num=JOINTS_NUM)
+    model = PHD(joints_num=JOINTS_NUM, latent_dim=1024)
 
     # ----------------------------------
     # TRAINING PHASE 1 : freeze ResNet, train f_movie + f_3D
