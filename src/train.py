@@ -228,9 +228,10 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
             _phi, _phi_hat, joints_pred, _joints_hat = model.forward(feats, predict_future=False)
             # joints_pred: (B,T,J,3) assumed camera coordinates that match K
 
-            # 3D loss
-            l3d =  F.mse_loss(joints_pred, joints3d)
-            loss = l3d
+        # 3D loss
+        # l3d =  F.mse_loss(joints_pred, joints3d)
+        l3d = torch.norm(joints_pred - joints3d, dim=-1).mean()
+        loss = l3d
 
         timers["forward+loss"] += (time.time() - t_fwd)
 
@@ -322,7 +323,8 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
         _phi, _phi_hat, joints_pred, _joints_hat = model.forward(feats, predict_future=False)
         timers["forward"] += (time.time() - t_fwd)
 
-        l3d =  F.mse_loss(joints_pred, joints3d)
+        # l3d =  F.mse_loss(joints_pred, joints3d)
+        l3d = torch.norm(joints_pred - joints3d, dim=-1).mean()
 
         loss = l3d 
 
