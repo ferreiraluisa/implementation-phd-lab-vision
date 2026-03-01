@@ -348,7 +348,6 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
         total_loss / max(n_batches, 1),
         total_mpjpe / max(n_batches, 1),
         total_pa_mpjpe / max(n_batches, 1),
-        total_pa_mpjpe / max(n_batches, 1),
         total_l3d / max(n_batches, 1),
         0.0,  # total_l2d / max(n_batches, 1), since we're not using 2D loss in this version
     )
