@@ -230,13 +230,8 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
             # joints_pred: (B,T,J,3) assumed camera coordinates that match K
 
             # 3D loss
-            l3d = (joints_pred - joints3d).pow(2).mean()
-            # Bone length loss: encourage consistent limb lengths across time
-            lbone = bone_length_loss(joints_pred, joints3d)
-            # Velocity loss: encourage smooth motion by matching joint velocities
-            lvel = velocity_loss(joints_pred, joints3d)
-
-            loss = l3d 
+            l3d = F.smooth_l1_loss(joints_pred, joints3d, beta=0.01)
+            loss = l3d
 
         timers["forward+loss"] += (time.time() - t_fwd)
 
