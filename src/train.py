@@ -255,8 +255,8 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
         # --------------------
         running_loss += float(loss.item())
         running_l3d += float(l3d.item())
-        running_lbone += float(lbone.item())
-        running_lvel += float(lvel.item())
+        # running_lbone += float(lbone.item())
+        # running_lvel += float(lvel.item())
         running_mpjpe += mpjpe_m(joints_pred.detach(), joints3d.detach())
         n_batches += 1
 
