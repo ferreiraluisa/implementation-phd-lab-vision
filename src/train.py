@@ -80,6 +80,73 @@ def save_checkpoint(path: str, model: nn.Module, optim: torch.optim.Optimizer,
         path,
     )
 
+@torch.no_grad()
+def procrustes_align_batch(pred: torch.Tensor, gt: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """
+    Procrustes (similarity) alignment of pred to gt (scale + rotation + translation).
+    This is the standard PA-MPJPE alignment used in many H36M works.
+
+    Args:
+        pred: (B, J, 3) predicted 3D joints
+        gt:   (B, J, 3) ground-truth 3D joints
+        eps:  small constant for numerical stability
+
+    Returns:
+        pred_aligned: (B, J, 3) aligned prediction
+    """
+    assert pred.ndim == 3 and gt.ndim == 3 and pred.shape == gt.shape and pred.shape[-1] == 3
+    B, J, _ = pred.shape
+
+    # 1) Center both sets (remove translation)
+    mu_pred = pred.mean(dim=1, keepdim=True)   # (B,1,3)
+    mu_gt   = gt.mean(dim=1, keepdim=True)     # (B,1,3)
+    X0 = pred - mu_pred                        # (B,J,3)
+    Y0 = gt   - mu_gt                          # (B,J,3)
+
+    # 2) Normalize by Frobenius norm (gives scale invariance during rotation solve)
+    normX = torch.linalg.norm(X0.reshape(B, -1), dim=1, keepdim=True).clamp_min(eps)  # (B,1)
+    normY = torch.linalg.norm(Y0.reshape(B, -1), dim=1, keepdim=True).clamp_min(eps)  # (B,1)
+    Xn = X0 / normX.view(B, 1, 1)
+    Yn = Y0 / normY.view(B, 1, 1)
+
+    # 3) Solve optimal rotation with SVD of cross-covariance
+    #    A = Xn^T * Yn  (B,3,3)
+    A = Xn.transpose(1, 2) @ Yn
+
+    # torch.linalg.svd is stable and supports batches
+    U, S, Vh = torch.linalg.svd(A)             # U:(B,3,3), S:(B,3), Vh:(B,3,3)
+    V = Vh.transpose(1, 2)
+
+    # Enforce a proper rotation (det(R)=+1). Fix reflection if needed.
+    det = torch.det(V @ U.transpose(1, 2))     # (B,)
+    Z = torch.eye(3, device=pred.device, dtype=pred.dtype).unsqueeze(0).repeat(B, 1, 1)
+    Z[:, 2, 2] = torch.where(det < 0, -torch.ones_like(det), torch.ones_like(det))
+    R = V @ Z @ U.transpose(1, 2)              # (B,3,3)
+
+    # 4) Compute optimal scale (for similarity transform)
+    # With our normalization, scale between original sets:
+    #   s = (trace(R * A)) * (normY / normX)
+    # where trace(R*A) = sum singular values after reflection fix:
+    trace_term = (S * Z.diagonal(dim1=-2, dim2=-1)).sum(dim=1)  # (B,)
+    s = trace_term * (normY.squeeze(1) / normX.squeeze(1))      # (B,)
+
+    # 5) Apply similarity transform: aligned = s * (pred - mu_pred) * R + mu_gt
+    pred_aligned = (s.view(B, 1, 1) * (X0 @ R)) + mu_gt
+    return pred_aligned
+
+
+@torch.no_grad()
+def pa_mpjpe(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+    """
+    PA-MPJPE (Protocol #2): MPJPE after Procrustes alignment.
+    Args:
+        pred, gt: (B, J, 3)
+    Returns:
+        scalar tensor (mean over batch and joints)
+    """
+    pred_aligned = procrustes_align_batch(pred, gt)
+    return torch.norm(pred_aligned - gt, dim=-1).mean()
+
 
 # OPTION 1: project with intrinsic matrix K only (no distortion)
 # K = [[fx, 0, cx],
@@ -262,7 +329,12 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
         _phi, _phi_hat, joints_pred, _joints_hat = model.forward(feats, predict_future=False)
         timers["forward"] += (time.time() - t_fwd)
 
-        l3d = (joints_pred - joints3d).pow(2).mean()
+        # change MSE loss to 
+        #That can over-penalize outliers and often generalizes worse than an L1-like loss for pose.
+        #SmoothL1Loss(beta=0.01) or even direct MPJPE loss:
+
+        l3d = F.smooth_l1_loss(joints_pred, joints3d, beta=0.01)
+        # l3d = (joints_pred - joints3d).pow(2).mean()
         lbone = bone_length_loss(joints_pred, joints3d)
         lvel = velocity_loss(joints_pred, joints3d)
 

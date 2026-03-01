@@ -33,23 +33,30 @@ class CausalConv1d(nn.Module):
         return self.conv(x)
 
 class ResidualBlock(nn.Module):
-    # group norm + relu + causal conv1d + group norm + relu + causal conv1d + skip connection
-    def __init__(self, channels, groups=32):
+    def __init__(self, channels, groups=32, p_drop=0.2):
         super().__init__()
         self.gn1 = nn.GroupNorm(groups, channels)
         self.relu = nn.ReLU(inplace=True)
         self.conv1 = CausalConv1d(channels, channels, kernel_size=3)
+        self.drop1 = nn.Dropout1d(p_drop)
+
         self.gn2 = nn.GroupNorm(groups, channels)
         self.conv2 = CausalConv1d(channels, channels, kernel_size=3)
+        self.drop2 = nn.Dropout1d(p_drop)
 
     def forward(self, x):
         residual = x
+
         x = self.gn1(x)
         x = self.relu(x)
         x = self.conv1(x)
+        x = self.drop1(x)
+
         x = self.gn2(x)
         x = self.relu(x)
         x = self.conv2(x)
+        x = self.drop2(x)
+
         return x + residual
 
 
@@ -141,6 +148,7 @@ class PHDFor3DJoints(nn.Module):
         self.f_movie = CausalTemporalNet(latent_dim)
         self.f_AR = CausalTemporalNet(latent_dim)
         self.f_3D = JointRegressor(latent_dim, joints_num)
+        self.norm = nn.LayerNorm(latent_dim)
 
     # @torch.no_grad() # resnet must not be trained
     # def extract_features(self, video):
@@ -155,6 +163,7 @@ class PHDFor3DJoints(nn.Module):
     def forward(self, feats, predict_future=False):
         # feats = self.extract_features(video) # preprocessed features input in preprocess_resnet_features.py
         # feats: (B, T, 2048)
+        feats = self.norm(feats) # layer norm for better training stability, as in the original PHD codebase 
         phi = self.f_movie(feats) # temporal causal encoder f_movie
 
         ar_out = self.f_AR(phi) # autoregressive predictor f_AR
