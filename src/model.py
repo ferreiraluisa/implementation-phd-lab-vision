@@ -128,56 +128,42 @@ class JointRegressor(nn.Module):
 # third, the autoregressive predictor fAR predicts the next latent movie strip based on previous ones
 # finally, the joint regressor f3D takes both the latent movie strips and the predicted ones to output the 3D joint positions.
 class PHDFor3DJoints(nn.Module):
-    def __init__(self, latent_dim=2048, joints_num=17, freeze_backbone=True):
+    def __init__(self, latent_dim=2048, proj_dim=1024, joints_num=17):
         super().__init__()
 
-        # ----------------------------------------------------
-        # PER-FRAME FEATURE EXTRACTOR
-        # ----------------------------------------------------
-        # pretrained ResNet-50 + average pooling of last layer as 2048D feature extractor
-        # resnet = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
-        # self.backbone = nn.Sequential(*list(resnet.children())[:-1])
-        # commented out bc we don't want to extract features here, only in preprocess_resnet_features.py
+        # Normalize original ResNet features
+        self.norm_in = nn.LayerNorm(latent_dim)
 
-        # if freeze_backbone:
-        #     for p in self.backbone.parameters():
-        #         p.requires_grad = False
+        # 2048 -> 1024 projection (applied per-frame)
+        self.in_proj = nn.Sequential(
+            nn.Linear(latent_dim, proj_dim),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(proj_dim),
+        )
 
-        self.latent_dim = latent_dim
+        # Temporal nets now run at proj_dim
+        self.f_movie = CausalTemporalNet(latent_dim=proj_dim)
+        self.f_AR = CausalTemporalNet(latent_dim=proj_dim)
 
-        self.f_movie = CausalTemporalNet(latent_dim)
-        self.f_AR = CausalTemporalNet(latent_dim)
-        self.f_3D = JointRegressor(latent_dim, joints_num)
-        self.norm = nn.LayerNorm(latent_dim)
+        # Regressor also expects proj_dim
+        self.f_3D = JointRegressor(latent_dim=proj_dim, joints_num=joints_num)
 
-    # @torch.no_grad() # resnet must not be trained
-    # def extract_features(self, video):
-    #     # video: (B, T, C, H, W) batch_size, frames, channels, height, width
-    #     B, T, C, H, W = video.shape
-    #     x = video.view(B * T, C, H, W)
-    #     feats = self.backbone(x)          
-    #     feats = feats.flatten(1)         
-    #     return feats.view(B, T, -1)
-
-    # def forward(self, video, predict_future=False):
     def forward(self, feats, predict_future=False):
-        # feats = self.extract_features(video) # preprocessed features input in preprocess_resnet_features.py
         # feats: (B, T, 2048)
-        feats = self.norm(feats) # layer norm for better training stability, as in the original PHD codebase 
-        phi = self.f_movie(feats) # temporal causal encoder f_movie
 
-        ar_out = self.f_AR(phi) # autoregressive predictor f_AR
+        feats = self.norm_in(feats)
+        feats = self.in_proj(feats)  # (B, T, 1024)
+
+        phi = self.f_movie(feats)    # (B, T, 1024)
+
+        ar_out = self.f_AR(phi)      # (B, T, 1024)
         phi_hat = torch.zeros_like(ar_out)
         phi_hat[:, 1:, :] = ar_out[:, :-1, :]
 
-        joints_phi = self.f_3D(phi) # 3D regressor f_3D 
+        joints_phi = self.f_3D(phi)
 
         joints_hat = None
         if predict_future:
             joints_hat = self.f_3D(phi_hat)
 
-        # phi : teacher movie strips (B,T,D) batch_size, time, latent_dim
-        # phi_hat : predicted movie strips (B,T,D) batch_size, time, latent_dim
-        # joints_phi : joints from phi
-        # joints_hat : joints from phi_hat (optional)
         return phi, phi_hat, joints_phi, joints_hat
