@@ -189,8 +189,7 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
 
     running_loss = 0.0
     running_l3d = 0.0
-    running_lvel = 0.0
-    running_lbone = 0.0
+    running_pa_mpjpe = 0.0
     running_mpjpe = 0.0
     n_batches = 0
 
@@ -230,7 +229,7 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
             # joints_pred: (B,T,J,3) assumed camera coordinates that match K
 
             # 3D loss
-            l3d = F.smooth_l1_loss(joints_pred, joints3d, beta=0.01)
+            l3d =  F.mse_loss(joints_pred, joints3d)
             loss = l3d
 
         timers["forward+loss"] += (time.time() - t_fwd)
@@ -255,9 +254,8 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
         # --------------------
         running_loss += float(loss.item())
         running_l3d += float(l3d.item())
-        # running_lbone += float(lbone.item())
-        # running_lvel += float(lvel.item())
         running_mpjpe += mpjpe_m(joints_pred.detach(), joints3d.detach())
+        running_pa_mpjpe += pa_mpjpe(joints_pred.detach(), joints3d.detach())
         n_batches += 1
 
         t_iter_end = time.time()
@@ -270,6 +268,7 @@ def train(model, loader, optim, scaler, device, lambda_vel: float = 1, lambda_bo
                 f"[3D ]  iter {it+1:05d}/{len(loader):05d} | "
                 f"loss {running_loss/n_batches:.6f} (3d {running_l3d/n_batches:.6f}) | "
                 f"mpjpe {running_mpjpe/n_batches:.3f} | "
+                f"pa_mpjpe {running_pa_mpjpe/n_batches:.3f} | "
                 f"time/iter {timers['iter']/n_batches:.4f}s | "
                 f"epoch {dt_epoch:.1f}s"
             )
@@ -293,9 +292,8 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
 
     total_loss = 0.0
     total_l3d = 0.0
-    total_lbone = 0.0
-    total_lvel = 0.0
     total_mpjpe = 0.0
+    total_pa_mpjpe = 0.0
     n_batches = 0
 
     # Disable 2D loss during warmup
@@ -324,22 +322,14 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
         _phi, _phi_hat, joints_pred, _joints_hat = model.forward(feats, predict_future=False)
         timers["forward"] += (time.time() - t_fwd)
 
-        # change MSE loss to 
-        #That can over-penalize outliers and often generalizes worse than an L1-like loss for pose.
-        #SmoothL1Loss(beta=0.01) or even direct MPJPE loss:
-
-        l3d = F.smooth_l1_loss(joints_pred, joints3d, beta=0.01)
-        # l3d = (joints_pred - joints3d).pow(2).mean()
-        lbone = bone_length_loss(joints_pred, joints3d)
-        lvel = velocity_loss(joints_pred, joints3d)
+        l3d =  F.mse_loss(joints_pred, joints3d)
 
         loss = l3d 
 
         total_loss += float(loss.item())
         total_l3d += float(l3d.item())
-        total_lbone += float(lbone.item())
-        total_lvel += float(lvel.item())
         total_mpjpe += mpjpe_m(joints_pred, joints3d)
+        total_pa_mpjpe += pa_mpjpe(joints_pred, joints3d)
         n_batches += 1
 
         t_iter_end = time.time()
@@ -357,6 +347,8 @@ def evaluate(model, loader, device, lambda_vel: float = 1.0, lambda_bone: float 
     return (
         total_loss / max(n_batches, 1),
         total_mpjpe / max(n_batches, 1),
+        total_pa_mpjpe / max(n_batches, 1),
+        total_pa_mpjpe / max(n_batches, 1),
         total_l3d / max(n_batches, 1),
         0.0,  # total_l2d / max(n_batches, 1), since we're not using 2D loss in this version
     )
@@ -487,18 +479,18 @@ def main():
         print(f"\nEpoch {epoch+1}/{args.epochs}")
         t_epoch = time.time()
 
-        tr_loss, tr_mpjpe = train(
+        tr_loss, tr_mpjpe, tr_pa_mpjpe = train(
             model, train_loader, optim, scaler, device,
             log_every=args.log_every
         )
-        va_loss, va_mpjpe, va_l3d, va_l2d = evaluate(
+        va_loss, va_mpjpe, val_pa_mpjpe, va_l3d, va_l2d = evaluate(
             model, val_loader, device
         )
 
         scheduler.step()
 
-        print(f"Train: loss={tr_loss:.6f} | mpjpe={tr_mpjpe:.3f}")
-        print(f"Val:   loss={va_loss:.6f} (3d {va_l3d:.6f} + {args.lambda_2d:.3g}*2d {va_l2d:.6f}) | mpjpe={va_mpjpe:.3f}")
+        print(f"Train: loss={tr_loss:.6f} | mpjpe={tr_mpjpe:.3f} | pa_mpjpe={tr_pa_mpjpe:.3f}")
+        print(f"Val:   loss={va_loss:.6f} (3d {va_l3d:.6f} + {args.lambda_2d:.3g}*2d {va_l2d:.6f}) | mpjpe={va_mpjpe:.3f} | pa_mpjpe={val_pa_mpjpe:.3f}")
         print(f"Epoch time: {time.time() - t_epoch:.2f}s")
 
         save_checkpoint(
